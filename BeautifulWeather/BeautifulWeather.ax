@@ -1,0 +1,1655 @@
+# @name    BeautifulWeather
+# @desc    Animated 16x16 weather symbols, big temperature and humidity, hourly curve; turn the knob for rain in the next 3 hours, wind with a wind rose, a 3-day forecast, sunrise/sunset and the moon with moonrise/moonset (52x16, Ulanzi TC002)
+# @author  Hank_the_Tank / Claude
+# @version 2.8
+# @display 52x16
+# @config  lang  select "Language"           default=English options=English,Deutsch help="Language of the texts on the panel (rain page, weekdays)" group="Location"
+# @config  lat   number "Latitude"           default=52.52 min=-90 max=90 step=0.0001 group="Location"
+# @config  lon   number "Longitude"          default=13.40 min=-180 max=180 step=0.0001 group="Location"
+# @config  unit  select "Temperature unit"   default=C options=C,F group="Weather"
+# @config  view  select "Graph"              default=auto options=auto,today,next24 help="auto: today (0-24 h) until 18:00, then the next 24 h" group="Weather"
+# @config  hum   select "Humidity"           default=beside options=beside,alternate,off help="beside: next to the temperature. alternate: takes turns with the temperature every 4 s" group="Weather"
+# @config  hcol  color  "Humidity colour"    default=#31B8DB group="Weather"
+# @config  wind  number "Windy from"         default=30 min=10 max=100 unit=km/h help="Dry weather with at least this wind speed shows the windy symbol" group="Weather"
+# @config  wunit select "Wind unit"          default=km/h options=km/h,m/s,mph,kn,Bft help="Unit of wind and gusts on the wind page" group="Weather"
+# @config  cloud number "Cloudy from"        default=70 min=30 max=100 unit=% help="Dry weather: cloudy from this cloud cover, partly cloudy from half of it" group="Weather"
+# @config  mcol  color  "Midnight tick"      default=#2040A0 help="Only in the next24 graph" group="Weather"
+# @config  ncol  color  "Noon tick"          default=#A08000 group="Weather"
+# @config  mode  select "Page change"        default=knob options=knob,auto help="knob: turn the knob to switch pages. auto: pages change by themselves, the knob keeps brightness/volume" group="Pages"
+# @config  psec  number "Time per page"      default=6 min=2 max=60 unit=s help="Only in auto mode: how long each page is shown (3-day forecast at least 10.5 s, wind and moon at least 8 s)" group="Pages"
+# @config  dur   number "Display time"       default=10 min=3 max=60 unit=s help="Knob mode: how long the app stays in the rotation (auto: sum of all pages)" group="Pages"
+# @config  rain  bool   "Rain page"          default=true help="Knob page: rain in the next 3 hours, when it starts or stops" group="Pages"
+# @config  windp bool   "Wind page"          default=true help="Knob page: wind rose with direction, wind and gusts, the next 12 hours as bars" group="Pages"
+# @config  fcst  bool   "3-day forecast"     default=true help="Knob page: tomorrow and the two days after, 3.5 s each" group="Pages"
+# @config  sunp  bool   "Sun page"           default=true help="Knob page: sunrise and sunset (after sunset the times of tomorrow)" group="Pages"
+# @config  moon  bool   "Moon page"          default=true help="Knob page: moon phase with moonrise and moonset. Turn right = next page, left = back" group="Pages"
+# @config  hold  number "After turning"      default=20 min=5 max=120 unit=s help="Knob mode: after the last turn the app stays this long, then the rotation moves on" group="Pages"
+#
+# Moon pictures by LeonCB (AWTRIX Hub, awtrix.de/icons/full-moon and the other 7 phases), embedded.
+# Cloud style and shape after LeonCB's "rainy" icon (awtrix.de/icons/rainy-2).
+# Automatic page change: idea and first version by DennsDJ.
+import math
+import string
+
+class BeautifulWeather
+  var url, unit, view, wind, cloud, mcol, ncol, dur, hold, moon, lat, lon   # settings
+  var st, bm, fb, rn, L, wp, bolt, sk, rb, rs8     # colour stops, glyphs, icon buffer, random table, layers, shapes
+  var mh, mimg, mi, mr, mst, rs, ss, nev, mtw   # moon: hex images, decoded image, phase; rise/set
+  var wk, wh, traw, tc5, hr, tg, tu, tx, hum, hcol, hraw, hg, hx, hc5, nar, ly                 # weather symbol, temperature, gradient, hourly values
+  var ay, ac, ad, ab, fx, today, bh, nx, tm, tn # graph
+  var mday, mhr, mmin, ticks, age, busy, t0, tid
+  var mf, mpg, mpw, mc5, mc5f                    # moon: phase 0..1, lit-% glyphs and width, colours (+ faded copy)
+  var de, auto, psec, atid                      # German panel texts; automatic page change, ms per page, its timer
+  var pages, pi, pp, ps, tp, ts                 # knob pages (0 weather, 1 rain, 2 moon), index, previous, start times
+  var mp, mt0, rbh, rbc, rtk, rtt, rtc, rtx, rst, ut   # rain page: 15-min mm from mt0, bars, text, state, umbrella top
+  var sr, su, srs, sss, snev, stw, fd, fdd       # sun rise/set (epoch), strings, next event; daily forecast
+  var qi, sl, wsv, rq                           # rain/snow amount factor, wind slant, wind speed, mm now
+  var wst, wunit, wdv, wgv, whr, wgr, wv, wb, wc5f, wnc   # wind page: colour stops, unit, direction, gusts, hourly, digits, bars
+
+  def init()
+    # Temperature colour stops: lower bound, colour - interpolated in between
+    self.st = [-12, 0xD977DF, -6, 0x9545BC, -1, 0x4B379C, 0, 0xFEC4FF,
+               4, 0x31B8DB, 10, 0x31DB8B, 15, 0x6ED228, 21, 0xFFFF28,
+               27, 0xF87E27, 32, 0xCF3927, 38, 0xA12527]
+    # Block glyphs 3x5, drawn at 2x (6x10): digits 0-9, 10 minus, 11 percent, 12 F, 13 C
+    self.bm = [0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF,
+               0x01C0, 0x52A5, 0x79A4, 0x7927]
+    self.lat = store.get("lat")
+    self.lon = store.get("lon")
+    self.unit = store.get("unit")
+    self.view = store.get("view")
+    self.wind = store.get("wind")
+    self.cloud = store.get("cloud")
+    self.mcol = store.get("mcol")
+    self.ncol = store.get("ncol")
+    self.dur = store.get("dur")
+    self.de = store.get("lang") == "Deutsch"
+    self.auto = store.get("mode") == "auto"
+    self.psec = int(store.get("psec")) * 1000
+    self.atid = nil
+    self.hold = store.get("hold")
+    self.moon = store.get("moon")
+    self.url = "http://api.open-meteo.com/v1/forecast" +
+               "?latitude=" + str(self.lat) + "&longitude=" + str(self.lon) +
+               "&current=temperature_2m,relative_humidity_2m,is_day,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,cloud_cover,precipitation" +
+               "&minutely_15=sunshine_duration,precipitation&forecast_minutely_15=16" +
+               "&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_probability_max" +
+               "&forecast_days=4&timeformat=unixtime&timezone=auto"
+
+    # 16x16 frame buffer for the weather symbol, a fixed pseudo-random table for particles
+    self.fb = []
+    for i : 0 .. 255 self.fb.push(0) end
+    self.rn = []
+    var s = 20261011
+    for i : 0 .. 63
+      s = (s * 1103515245 + 12345) % 2147483648
+      self.rn.push(((s >> 10) % 1000) / 1000.0)
+    end
+
+    # Clouds in pixel-art style (like the rainy-2 icon): 1 light top, 2 shadow row and notches, 3 dark base
+    var cb = ["......111.......",
+              ".....11111......",
+              "..11.111111.11..",
+              ".11112111111211.",
+              "111111111111112.",
+              "322222222222223.",
+              ".3333333333333.."]
+    var cs = ["....111.....",
+              ".11.11111.11",
+              "111211111211",
+              "322222222223",
+              ".3333333333."]
+    var mo = "000000000000000040FF55FE000000000000000000000000000000000000C6FAFFF032EA00000000000000000000000000000000E3F8FFE9D5DE0000000000000000000000000000000095FDFFEBFFDBAACD00000000000000000000000000000000F8F5FFE2FFCFC6BE00000000000000000000000000002BFFFFF1FFDDFFC9FFB500000000000000000000000000002BFFFFF1FFDDFFC9FFB5B1A10000000000000000000000000000F8F5FFE2FFCFFFBEFFB0B1AB00000000000000000000000095FDFFEBFFDBFFCDFFC3FFC0FFC4C6CFAADED5EF6AFF00000000E3F8FFE9FFDEFFD6FFD4FFD7FFE0FFECB8FB0000000000000000C6FAFFF0FFEAFFE8FFEBFFF2A3FC00000000000000000000000040FF80FEA3FD78FF2BFF000000000000"
+    var ms = "000000002BFF55FF000000000000000023FFCDF7FFEBFFE8FFEDAAFA00000000D5F6FFE0FFCFFFCAFFD2FFE4AAFA000032E82BCD5CB6EAADFFBAFFD2FFED00000000000000002B90F8ADFFCAFFE855FF0000000000000000A3B6FFCFFFEB2BFF000000000000000080CDFFE0CDF700000000000000000000B1E8D5F623FF0000000000000000000055FF000000000000"
+    self.L = {
+      "cl": self.pix(cb, [0xEBF0F5, 0xBEC8D2, 0x788291]),   # big cloud, light
+      "cd": self.pix(cb, [0xBCC4D0, 0x8E98A6, 0x5A6372]),   # big cloud, rain
+      "ct": self.pix(cb, [0x8A90A0, 0x666C7C, 0x41465A]),   # big cloud, thunder
+      "cf": self.pix(cb, [0xFFFFFF, 0xE4EAF2, 0xA8B2C0]),   # big cloud, lit by lightning
+      "kl": self.pix(cb, [0xA6AEBC, 0x808A98, 0x566070]),   # big cloud behind
+      "sl": self.pix(cs, [0xEBF0F5, 0xBEC8D2, 0x788291]),   # small cloud, front
+      "su": self.tint(3, 3, 10, 10, "0000000000007100AA12AA12710000000000000000002B00EA29FF58FF6FFF6FFF58EA292B0000000000EA29FF6FFF9DFFB4FFB4FF9DFF6FEA2900007100FF58FF9DFFCBFFE2FFE2FFCBFF9DFF587100AA12FF6FFFB4FFE2FFF9FFF9FFE2FFB4FF6FAA12AA12FF6FFFB4FFE2FFF9FFF9FFE2FFB4FF6FAA127100FF58FF9DFFCBFFE2FFE2FFCBFF9DFF5871000000EA29FF6FFF9DFFB4FFB4FF9DFF6FEA29000000002B00EA29FF58FF6FFF6FFF58EA292B0000000000000000007100AA12AA127100000000000000", 0xFF9000, 0xFFF8C0),
+      "ss": self.tint(7, 1, 8, 8, "0000000000005500550000000000000000004700F144FF70FF70F144470000000000F144FF9CFFC8FFC8FF9CF14400005500FF70FFC8FFF4FFF4FFC8FF7055005500FF70FFC8FFF4FFF4FFC8FF7055000000F144FF9CFFC8FFC8FF9CF144000000004700F144FF70FF70F1444700000000000000000055005500000000000000", 0xFF8400, 0xFFF6B0),
+      "mo": self.tint(1, 2, 12, 12, mo, 0xA8925A, 0xFFF4C8),
+      "ms": self.tint(8, 0, 8, 9, ms, 0xA8925A, 0xFFF4C8)
+    }
+    # Umbrella for the rain page: open, and furled when it stays dry
+    var uo = ["................",
+              "........5.......",
+              "......14441.....",
+              "....121444122...",
+              "...11214441222..",
+              "..1112111112222.",
+              ".111121111122222",
+              ".111.211.112.222",
+              "........3.......",
+              "........3.......",
+              "........3.......",
+              "........3.......",
+              "........3.......",
+              ".....3..3.......",
+              "......33........"]
+    var uz = ["................",
+              "........5.......",
+              "........4.......",
+              "........4.......",
+              ".......112......",
+              ".......112......",
+              ".......333......",
+              ".......112......",
+              ".......112......",
+              ".......112......",
+              ".......112......",
+              "........3.......",
+              "........3.......",
+              ".....3..3.......",
+              "......33........"]
+    var up = [0xE23A4E, 0xA0202E, 0xB8BCC6, 0xFF8492, 0xE8ECF2]
+    self.L["uo"] = self.pix(uo, up)
+    self.L["uz"] = self.pix(uz, up)
+    self.ut = []                                 # first canopy row per column: where drops land
+    for x : 0 .. 15
+      var y = 0
+      while y < 8 && uo[y][x] == "." y += 1 end
+      self.ut.push(y < 8 ? y : 16)
+    end
+    # Sunrise symbol: half sun over the horizon (row 12), anti-aliased, hot centre to orange rim
+    var C = []
+    var A = []
+    for y : 0 .. 11
+      for x : 0 .. 15
+        var n = 0
+        for sy : 0 .. 2
+          for sx : 0 .. 2
+            var dx = x + (sx + 0.5) / 3 - 8.0
+            var dy = y + (sy + 0.5) / 3 - 12.0
+            if dx * dx + dy * dy <= 27.0 n += 1 end
+          end
+        end
+        var d = math.sqrt((x + 0.5 - 8.0) * (x + 0.5 - 8.0) + (y + 0.5 - 12.0) * (y + 0.5 - 12.0)) / 5.2
+        A.push(n < 2 ? 0.0 : n / 9.0)
+        C.push(self.mix(0xFFF4B0, 0xFF7A00, clamp(d * d, 0, 1)))
+      end
+    end
+    self.L["hs"] = [0, 0, 16, 12, C, A]
+    # Compass ring for the wind page: soft circle, north marked red, east/south/west light
+    C = []
+    A = []
+    for y : 0 .. 15
+      for x : 0 .. 15
+        var d = math.sqrt((x - 7.5) * (x - 7.5) + (y - 7.5) * (y - 7.5)) - 7.3
+        var c = 0x46546A
+        var a = clamp(1 - (d < 0 ? -d : d), 0, 1)
+        if (x == 7 || x == 8) && (y <= 1 || y >= 15)
+          c = y <= 1 ? 0xFF3A2A : 0xA8B2C0
+          a = y == 1 ? 0.8 : 1.0
+        elif (y == 7 || y == 8) && (x == 0 || x == 15)
+          c = 0xA8B2C0
+          a = 1.0
+        end
+        C.push(c)
+        A.push(a < 0.1 ? 0 : a)
+      end
+    end
+    self.L["wr"] = [0, 0, 16, 16, C, A]
+    # Wind streaks as pixel paths (x, y, ...) ending in a curl; lightning bolt; night stars x, y
+    self.wp = [[1,4, 2,4, 3,4, 4,4, 5,4, 6,4, 7,4, 8,4, 9,4, 10,4, 11,3, 11,2, 10,1, 9,2],
+               [0,8, 1,8, 2,8, 3,8, 4,8, 5,8, 6,8, 7,8, 8,8, 9,8, 10,8, 11,8, 12,8, 13,7, 14,6, 14,5, 13,4, 12,5],
+               [2,12, 3,12, 4,12, 5,12, 6,12, 7,12, 8,12, 9,12, 10,13, 10,14, 9,15, 8,14]]
+    self.bolt = [9,8, 8,9, 7,10, 8,10, 9,10, 8,11, 7,12, 6,13]
+    # Sun rays: x, y, diagonal?, outer?  - big sun (disc around 8,8) and small sun (around 11,5)
+    self.rb = [7,1,0,0, 8,1,0,0, 7,0,0,1, 8,0,0,1,  7,14,0,0, 8,14,0,0, 7,15,0,1, 8,15,0,1,
+               1,7,0,0, 1,8,0,0, 0,7,0,1, 0,8,0,1,  14,7,0,0, 14,8,0,0, 15,7,0,1, 15,8,0,1,
+               2,2,1,0, 1,1,1,1, 13,2,1,0, 14,1,1,1, 2,13,1,0, 1,14,1,1, 13,13,1,0, 14,14,1,1]
+    self.rs8 = [10,0,0,1, 11,0,0,1, 6,4,0,1, 6,5,0,1, 15,4,0,1, 15,5,0,1, 7,1,1,1, 14,1,1,1, 7,8,1,1, 14,8,1,1]
+    self.sk = [12,4, 14,1, 15,9, 9,1, 13,13, 2,1]
+
+    # Moon pictures by LeonCB (AWTRIX Hub, awtrix.de/icons/full-moon etc.); the clouds follow his rainy-2 icon.
+    # Your moon pictures (new, waxing crescent, first quarter, waxing gibbous, full, waning gibbous,
+    # last quarter, waning crescent) as RRGGBB hex, 16x16
+    self.mh = [
+             "00000000000000000000000001010103050805070A04080A05080A04070A03050701010100000000000000000000000000000000000001010102050704080B050A0D05090D050A0E05090D05090C05090D05090C02040601010100000000000000000001010103060805090C05090B05090D050A0E050A0D05090C05090D060B10050A0E04080B03040601010100000000000002040505090B04080A05090B05090C060B0F05090D05090B05090B050A0D05090D050A0D04070902040500000001010104070904080B05090B05090C050A0E060B10050A0E050A0D05090D04080B04070905080B05090D04070901010103030504070A05090B05090C05090D050A0F060B0F05090C050A0D060B0E05090B05090C05090C04070A04070A03030503060705080C05090C050A0E060C10060C10050A0D060C10070D12070D12070C10050A0E060B1005080B05090B04070803050704070A05090C050A0E060C10050A0E050A0E070B10070D12070D12070E13060C11060B0F060A0E05080B04070903050804070905090C050A0E060A0F060B10060B10070D12070D12070D12070D13070E13060B0F050A0E05090D04070904070904070904080A05080B060A0E050A0E050B0F060B0F070D12070D12070D12070C11060C10050A0F050A0E04060803050703070A04080A04080B05090B060B0F050A0D060A0E070D12070D12070C11070C11060B0F050A0F05090C01030501010105080B05080C05090D04080B05090D050A0E060A0E070E13070D12070D12060B10050A0F050A0E04070901010100000002050505090C050A0E05090C050A0E060A0F070D11070D12070D12060C10060A0F050A0F05080B02040500000000000001010103060805090C050A0E050A0E060A0F060B10060C11060B10060B10050A0F05090C03040701010100000000000000000001010103040605080B05090C05090C050A0E050A0E050A0E05090D05080B02040601010100000000000000000000000000000000000001010102040604070904080A040809040609020406010101000000000000000000000000",
+             "000000000000000000000000010101030305030405090A0A2A292756534F55514D0D0D0C00000000000000000000000000000000000001010102050704070A04080904060903050702040510101045434077726E625F5A06060600000000000000000001010104070905090C04080A04080A04080B0306080305060204050B0B0C4543406D67626A645F05050500000000000004060706090D04080A04080B04080B04080B030608030506020405020405131212504D4977716C69656100000001010105090C05090C05080B05080B05080C05090D04070A0406090306070204050102032C2A285C57528B857E0D0D0C040608050A0C050A0D05090C05090C050A0D05080B04070A04070A04080902040502040514141344403C78726B77726E05080A060A0E050A0D060A0E060B0F060A0F04080B05090D05090D05090C04080A030506020405373532716B669D989005090B05090D060A0E060A0F060B0F060A0E05090C060A0E05090E05090D04080C04060902040522211F67625E98928C05090B05090C060A0E060B0F060A0F060A0F060A0E060A0F060A0E05090D04090C0407090304061C1B1A676460938E89060B0F05090C05090C05090C060A0E050A0D060A0E05090C060A0F05090D05090C040709030507191919625F5C8F8B8605090D060A0D05090C050A0C050A0C060A0E05090D05090B060A0D060A0F05090C04070A0305071617165F5C58645F5B010102070C10060C0F060B0F060A0E060A0E060A0E060A0D060B0F060B0F05090D04070A0305071D1C1C66625D0E0D0C00000005090A070D12070D11070B0F060A0D060A0E060B10060C10060A0F05090D0407090305062F2E2C46444100000000000001010105090D070D13070D11060B0F060B0F060B0F060B0F060A0E05090B040709090B0B34333004040400000000000000000001010104070B060C10060B0F060A0F060A0F060A0E05090D04080A05070815151503030300000000000000000000000000000000000001010204070A06090D06090D05090D04070A020406010101000000000000000000000000",
+             "00000000000000000001010101020216161644423F64605C817D77918C8777736E32302E070707000000000000000000000000000000010101020406020305111111413E3B696560857F789D9790B2AAA3B8B2AB948F8B1D1C1B0101010000000000000101010306080306090204060607082C2A29514D496B655F867F78B2ACA5C8C2BAC5BCB4A09A951F1E1D0101010101010306060407090306080204060204051A19183E3B385C57516F6862938D86AFA8A0C5BDB4BCB3AA716D6811111002030303070A0407090305080305070204050F0F0F312F2D56514C625D57726C66837B74B3ABA2CAC1B8CAC2BA35333103060704080C040709040609030508020406050607232221504C49605C576B655F837C75A29A91A69D93C9C0B6746F6A03070A05090D04070A04080A04070A0305070204051A1A184F4C496B68647D7973958F88AFA79FA49B92D0C7BEA9A59E04070904080B05090C04080B04080A0305080204050B0C0C3E3C3A6965628A878299948EAAA39CBCB4ACCDC4BABBB4AD04080B04080B05090B04080A04070A0406080305070305062B2A295A5754817D799C9893A49D96BDB5AED3CDC4BAB3AB06090D04090C04070A04070A0407090306080204070204051A1A194A4744716E6996928DA8A39DC1BBB5DDD7D0A5A09A04090B05090C04080B04080B04070A0407090305070204060C0C0D3C3B3965615E898480A29C96BCB7B0D1CAC36F6A66020405060B0F060A0F05090C04070A0407090305080305070304062D2B2A5956537F7B779B9691B3ADA7B2AAA32C2A2801010104090C070C11060B0F05080B05080B04070A0407090204061B1A1A4A4745726E6A938F8AA9A29C5955510D0C0C000000010203050A0D060B0F060A0E05090D04080B0407090305070B0C0D3C3A376764618A87825F5C59171615020202000000010101010203040709050B0E05090D04080B04080A030608050707262524514E4C3F3D3B1514130303030000000000000000000101010101020203040406080407090307090205070304060C0C0C0F0F0E090808020202000000000000",
+             "00000000000000000000000004040344423F7E7A7695908AA09B93B6B1AA86827C111110000000000000000000000000000000000000010101060707403E3A706A65958F89A7A099B9B2A9BFB6ACCAC0B7DCD4CC8D8782060606000000000000000000010101010406161615514C487068618C847CA9A29AACA299ACA095BAB0A6EDE6DEECE4DC9F97900606060000000000000204050204052725234B47436B645D867E76A49D95A0978DA2968CA69A8FC5BCB2DFD7CFD2C9BF837D79000000010101030507020304272523504B476B655E857E76A9A19AA69D94ADA399A8A097A399909D958CD8D0C6E3DBD213131203050702050702030424222056514C6F68628B857E8E867F988F86ADA49BBFB7AFA29991B8AFA5C4B9AEBAAFA49C96900406080204060102041F1E1C58555187837E8E8881877F79B3ACA3D3CCC5DFD9D1E2DBD4D8CFC6E6DDD4C6BCB1E0DAD20407090204060102041817164E4A4675716C7D7871948E87B2ABA4D1CAC2E0D9D2F0EBE5EAE3DBE3DBD2E3DBD2DAD2C805080B0305070103050C0C0B3F3C38615C567F7973948D86B3ACA4C4BDB5D8D1CAE4DDD5F4EFE8DED5CBECE4DBE6E0D705090E0406090103050304042C2A2759555169635C837C759E968FC0B9B2CDC5BDDCD6CEECE6DFEEE7DFF5F0E9E0D9D404080B04080C020406010204191817403D3A68635F746D668B847DBBB6B0CFC9C1D4CDC5E2DCD5E4DDD5ECE6DE96928D01010205090D04070A0305060405062C2927595450736E69948F89C1BDB8CAC5C0CDC8C1D8D2CBDED8D1D2CCC411100F00000004070905090C040709020305141312484541736F6A95928DB1AEA9BEBAB5C1BBB5C8C2BACDC7C078746E00000000000001010104070A05080B03060802030528272555534F7B78749B9793A8A49FB0ABA6B9B4AD88858006060500000000000000000001010104060904070A030507040606282725514E4B7C797588848096918C666460060606000000000000000000000000000000000000010102030607030507020405101010333230363533080808000000000000000000000000",
+             "0000000000000000000000000A0A09666460938F8998928BA39E9799938E64615D0C0C0C0000000000000000000000000000000000000404045855529B948CB7B0A9BCB4ABC3BBB2BDB3AAB9B0A6C5BFB7B0ACA4625F5C04040400000000000000000003030366625EA39B93ACA298BFB5ABD1C9C0BFB4AAB4A89DBCB1A7DCD5CDCCC5BCA69E9667625D04040300000000000046423F9C948C958C82A89D92BAB0A6CEC4BBB6ABA0B3A89CAA9F94BFB6ACBAB0A7C4BCB4A0989056524F0000000505057670699B91889C938AADA398C8BEB3E1D8CFC2B7ACC5BAB0AEA79EA79E95988F86B4AAA0B0A79F9A938D080807363430857C749E948BA79D94BAB0A5C7BDB3C8BFB4B5AA9ECFC6BBD1C9C0A8A096C0B8AEC4BAB09E948BA0988E57545055504B9A928AA0978DC0B6ACDCD3CBDCD3C9BEB4AAE7DED4FAF4ECF8F3EAF0ECE6D5CCC2E6DED6BCB4AAAEA59D8B85805B5551857D75A9A097BEB6ACDFD7CFC4BBB1C9C0B6E7DED4FBF4ECFCF8F0FEFCF6F4EFE8CEC5BBD3CBC2B4ACA4918C8659544F7A726BA69F96BBB2AAC6BDB3D6CDC2D9D0C7F0E8DFF2EAE1F8F1E8F6EFE7F8F3ECE1DAD1D7CFC7C9C4BD96918C65615D7770688981799E958CBBB1A6BAB0A6CEC4BAD2C9BFF5EDE4F4EDE4F8F1EAF1EBE3EAE4DCD8D2CAD0CCC68C878243423E777069857C74948B81A39990D0C8BEBDB2A9BCB2A8ECE5DCFAF5EFF0E9E0ECE6DEDED7CFD0CAC3B2ACA6514D490505057C7873978F87ACA39AA1988FBFB6ACBFB6ADC7BEB4F5F1EBF9F5EFEEE9E2E3DED7D6D0C9C5BFB9948F890908080000003B3A38938E88ADA6A0A39A91B2A89FC0B8B0E2DCD6F0ECE6EEEBE6E6E1DBD1CCC4C4BEB7A8A39D4C49470000000000000202024E4C4997938EAFAAA3AFA7A0C4BEB7CDC8C1D9D5CFDAD7D1CFCAC5C0BBB5AAA59F64615E0303030000000000000000000101013A38367D7A75938E87A09A93ACA7A0B5B1ABBDB9B4AFABA696928C4E4C490303020000000000000000000000000000000000000404043A38356865607F7B78837F7A73706C454341060505000000000000000000000000",
+             "0000000000000000000000000F0E0E676562807D786A676443413E0E0E0F030305010101000000000000000000000000000000000000050505716C67ACA49EA1999299928B87817B6F69644946431716160305070304060101010000000000000000000504047C746CB9AFA6A2988E9D92879C948B9D979087827C65605A3E3B38080809030508040609010101000000000000645D57B2A89DABA0959A9188A0958BA39B929D968E78706868615B5854502927260204050407090406080000000E0D0DABA197BAAEA3B2A89DA69C91ACA299B2A9A19A9189776F676E665F56514D413E3B07080803050604070A01010179736CBDB3A9BDB2A8C2B7ACB8AEA4B8AFA5B7AFA79990878E8780746E6954504C3936330D0E0E0204060407090305079B9187AFA59BC8BEB4DED6CDE3DCD6BFB7AEADA39AA199909D968F716B6658534F3E3B3813131302040503060805080BB0A59CAFA59BD5CCC3D4CBC1D0C7BFB1A89FB1A89FBFB8B0B8B3AC918C8766615C5955521F1E1D01030403060805090BBDB3AAABA197B8AEA4C6BBB1CAC0B6C5BBB2D0C8C1C6BFB7BAB5AFA5A19C7F7B76605D5826252401030504060805090CCBC3BCB7ACA0B7ACA1C6BCB3BCB1A8B3AAA0CBC3BBC2BBB2B7B1AAA9A59F8D89855A56522E2C2B02040604060905080BA39F98DFD6CCDAD1C7BEB4ABC3B9AFB0A69CCAC3BAC5BEB7B3ADA6A39E9987837F5F5B5721201F02040604070A030709151413EFE9E3CFC5BCB8ADA3C1B8AFABA198C5BFB7CEC8C2B8B3AD9C9892827F7A5D595612121203050704080A01010100000094908BE8E1D9D2C9BFCDC5BDDDD7D1DEDAD4CECBC5B5B1AB9A95907975714C49460B0B0C030608020506000000000000080808A59F9BD6CDC4D9D3CBD6D1CAD6D3CDC7C3BEAAA6A18E8A85686561312F2D050608030406010101000000000000000000070707837F7ABFB7AFC5BFB7C3BFB9B3AFAA9B97927875704B4846090A0B020405010101000000000000000000000000000000000000121211807E7B9E9A96928E8A7977724946440A0A0C010101000000000000000000000000",
+             "00000000000000000000000004030303030503050704060905080A05080C04070A0102020000000000000000000000000000000000000505054946444B484410101002030503050804070A04080C050A0E060B0F05070B0101010000000000000000000505056D6865746E69524E492B292703040602040603050804070A05090D050A0E050A0E04090C010101000000000000645F59908881665F5A56514B3C38360B0B0B01030402040703050804080B060A0D060A0D050A0E04070A0000000C0C0B989086887F776E66605F5A544A47431D1C1B010304020406020407030508030609060A0D060B0F060B100101026E665F9D938A8B827B7B746D69635D56524E2A282602030402040603050703050804070A04070B04080B060B0F05080C958D84ADA39A938A81928C85847F795F5B56403D3A12121202040603050804070A04080C05090C04080C060B0F060B119A90899F968EA299919D97908B8680635E594E4B4728262502030503050804070A05080B05090C050A0D060A0F070C109F968C978E85AEA69E99928B8A837C76716B635F5B413F3C090A0A02040604060905080B05080B050A0D060C10060B10CAC1B89D9389928981938B838880797E7771615C574F4C491B1A1A02040503050805080B05090C050A0E060C11060B10ACA8A4A89E94998F8692897F89817A7C756E66605A5D595533323002030403050704070A05080B05090D060B0F030709141413E3DBD2BFB5ABB5ACA390878088817A6E686268635F4D4B4915161602040503060905080B05090C05090D01010200000096918DE6DFD6C8C0B8999087969089908B86827E7A605E5B28262602030503050804070A05080B040507000000000000060606B2ADA8DFD8D1C7C0B8B0AAA39E9A948985816E6B68413F3D05060703050704070A0406080101010000000000000000000808088E8A85CDC6BFB9B2AAA39E97928E88777471585754181818020406020406010101000000000000000000000000000000000000111010837F7AA9A49E9C98937C79755A5654242423020202000000000000000000000000",
+             "00000000000000000000000001010103050704070A05090B05090D060A0E05070B01010200000000000000000000000000000000000003030307070703050704070B05090C05090E05090E060A0E060C11070D1104070B010101000000000000000000040303201E1E02040503060804060A05090C05090C05080B05090C060B10060C11060C1004070B0101010000000000003D3A3619181702040503050604060905090C05090C04080A05090C05090C05090C060C10060B1004070B0000000B0B0A4D47420E0F0F02040503050604060A05080B05090D05090C060A0D04070A05080B06090C060A0E060B10010102504C4647423E0B0C0B02040503050704070A04070A05080B05080C060B10060A0D05090C070C11060A0F060A0E04080C6A645D4A46410F0F0F02040503060903070B04070A05080B060A0E060C11060C11060C10070C10070D11070C10060B10746D6648443F16151402030503050804060A04070A05090D060A0E060C11060C11070D13070D12060B10060C11070C107B756E4F4A4524232102030403050603060804070A04080B06090E060B0F060C10060C11070D12070D11070D12070C11A49E99625C5637343008080802040503050704060904070A05090C06090F060B10060B10070D12060D11070D12060B1087848087817B47423E1E1C1B01030402040503060804060904070B060A0E060B10060C10060B10060C11060C1005070A141413A29D9776716C45413D0E0E0E02030403050704070904080C060A0F060B10060A0F060B0F060B10060A0E01010200000079757099948F6F6B6738353305050602040503060904080B05090D05090E05090D05090E050A0E04060900000000000006050585807D98938E64615D35333009090903040603060904080B05090C05090C05090D040609010101000000000000000000070606726F6B8C88826864603F3C3A14131304060703050803060904070902040701010100000000000000000000000000000000000010100F6A6764726F6B54524F383836191717090909010101000000000000000000000000"]
+    self.mi = -1
+    self.mf = 0.0
+    self.mpg = nil
+    self.mpw = 0
+    self.mc5 = self.grad(0xF0E6C8)
+    self.mc5f = [0, 0, 0, 0, 0]
+    self.mimg = nil
+    self.mr = -1
+    self.mst = -1
+    self.rs = "--:--"
+    self.ss = "--:--"
+    self.nev = 0
+    self.mtw = 19
+
+    # Last known weather survives a reboot
+    self.traw = store.get("temp")
+    self.hraw = store.get("hum_v")
+    self.hum = store.get("hum")
+    self.hcol = store.get("hcol")
+    self.nar = false
+    self.ly = 0
+    self.hr = store.get("hr", [])
+    self.wk = store.get("wk", -1)
+    self.wh = store.get("wh", 0)                 # 1/2: dry right now, but rain/snow showers about
+    self.mday = -1
+    self.mhr = -1
+    self.mmin = -1
+    self.ticks = 0
+    self.age = 9999
+    self.busy = false
+    self.t0 = now_ms()
+    self.tid = nil
+    # Pages in knob order: 0 weather, 1 rain, 5 wind, 4 three days, 3 sun, 2 moon
+    self.pages = [0]
+    if store.get("rain") self.pages.push(1) end
+    if store.get("windp") self.pages.push(5) end
+    if store.get("fcst") self.pages.push(4) end
+    if store.get("sunp") self.pages.push(3) end
+    if self.moon self.pages.push(2) end
+    self.sr = store.get("sr")
+    self.su = store.get("su")
+    self.srs = "--:--"
+    self.sss = "--:--"
+    self.snev = 0
+    self.stw = 19
+    self.fd = store.get("fd", [])
+    self.fdd = []
+    self.pi = 0
+    self.pp = -1
+    self.ps = now_ms()
+    self.tp = 0
+    self.ts = -99999
+    self.mp = store.get("mp")
+    self.mt0 = store.get("mt0", 0)
+    self.rbh = []
+    self.rbc = []
+    self.rtk = []
+    for i : 0 .. 11 self.rbh.push(0) self.rbc.push(0) self.rtk.push(false) end
+    self.rtt = "..."
+    self.rtc = 0x666666
+    self.rtx = 30
+    self.rst = 0
+    self.qi = store.get("qi", 1.0)
+    self.sl = store.get("sl", 0.0)
+    self.wsv = store.get("wsv", 0)
+    self.rq = 0
+    self.bh = -2
+    self.nx = -1
+    self.today = true
+    self.fx = []
+    self.ay = []
+    self.ac = []
+    self.ad = []
+    self.ab = []
+    self.tm = -1
+    self.tn = -1
+    # Wind colours in km/h: calm grey-blue, light cyan, green, yellow, orange, red (gale), violet (storm)
+    self.wst = [0, 0x8C9CB0, 8, 0x40C8E0, 20, 0x6ED228, 39, 0xFFE028, 50, 0xF8901F, 62, 0xF03A27, 89, 0xB040E0]
+    self.wunit = store.get("wunit")
+    self.wdv = store.get("wdv")
+    self.wgv = store.get("wgv")
+    self.whr = store.get("whr", [])
+    self.wgr = store.get("wgr", [])
+    self.wv = []
+    self.wb = []
+    self.wc5f = [0, 0, 0, 0, 0]
+    self.wnc = 0xFFFFFF
+    self.layout()
+    self.fcalc()
+    self.wcalc()
+  end
+
+  # ---------- helpers ----------
+  def col(c, f)
+    if f <= 0 return 0 end
+    if f >= 1 return c end
+    return (int(((c >> 16) & 255) * f) << 16) | (int(((c >> 8) & 255) * f) << 8) | int((c & 255) * f)
+  end
+
+  def mix(a, b, f)
+    if f <= 0 return a end
+    if f >= 1 return b end
+    return (int(((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * f) << 16) |
+           (int(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * f) << 8) |
+           int((a & 255) + ((b & 255) - (a & 255)) * f)
+  end
+
+  def ez(t)
+    t = clamp(t, 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+  end
+
+  def fr(x)
+    return x - math.floor(x)
+  end
+
+  # Shape -> layer [x0, y0, w, h, colours, alphas]; shade 0..1 runs from lo to hi
+  def tint(x0, y0, w, h, hex, lo, hi)
+    var b = bytes(hex)
+    var C = []
+    var A = []
+    for i : 0 .. w * h - 1
+      A.push(b[i * 2] / 255.0)
+      C.push(self.mix(lo, hi, b[i * 2 + 1] / 255.0))
+    end
+    return [x0, y0, w, h, C, A]
+  end
+
+  # Pixel-art rows -> layer at 0, 0; digit = palette index + 1, anything else empty
+  def pix(rows, pal)
+    var C = []
+    var A = []
+    for r : rows
+      for i : 0 .. size(r) - 1
+        var k = r[i] >= "1" && r[i] <= "9" ? int(r[i]) - 1 : -1
+        C.push(k < 0 ? 0 : pal[k])
+        A.push(k < 0 ? 0 : 1.0)
+      end
+    end
+    return [0, 0, size(rows[0]), size(rows), C, A]
+  end
+
+  # Icon buffer onto the panel at ox, oy with brightness f
+  def out(ox, oy, f)
+    var fb = self.fb
+    for i : 0 .. 255
+      var c = fb[i]
+      if c pixel(i % 16 + ox, i / 16 + oy, f < 1 ? self.col(c, f) : c) end
+    end
+  end
+
+  # Blend colour c into the icon buffer at x, y with opacity a
+  def pt(x, y, c, a)
+    if x < 0 || x > 15 || y < 0 || y > 15 || a <= 0.02 return end
+    var j = y * 16 + x
+    self.fb[j] = a >= 0.98 ? c : self.mix(self.fb[j], c, a)
+  end
+
+  # Sub-pixel point: spread over the four neighbours - smooth motion on 16 px
+  def sp(x, y, c, a)
+    var ix = int(math.floor(x))
+    var iy = int(math.floor(y))
+    var u = x - ix
+    var v = y - iy
+    self.pt(ix, iy, c, a * (1 - u) * (1 - v))
+    self.pt(ix + 1, iy, c, a * u * (1 - v))
+    self.pt(ix, iy + 1, c, a * (1 - u) * v)
+    self.pt(ix + 1, iy + 1, c, a * u * v)
+  end
+
+  def lay(n, dx, dy, a)
+    var L = self.L[n]
+    var C = L[4]
+    var A = L[5]
+    var x0 = L[0] + dx
+    var y0 = L[1] + dy
+    var i = 0
+    for y : y0 .. y0 + L[3] - 1
+      for x : x0 .. x0 + L[2] - 1
+        if A[i] > 0 self.pt(x, y, C[i], A[i] * a) end
+        i += 1
+      end
+    end
+  end
+
+  # ---------- weather symbol pieces ----------
+  # Sun: crisp rays on whole pixels, straight and diagonal ones breathing in turn; a glint circles the disc
+  def sun(big, t)
+    var R = big ? self.rb : self.rs8
+    var pa = 0.5 + 0.5 * math.sin(t * 2.6)
+    var i = 0
+    while i < size(R)
+      var a = R[i + 2] == 0 ? pa : 1 - pa             # 0 straight, 1 diagonal
+      var o = R[i + 3]                                 # 0 inner pixel, 1 outer pixel
+      self.pt(R[i], R[i + 1], o ? 0xFF9A10 : 0xFFC830, o ? a : 0.55 + 0.45 * a)
+      i += 4
+    end
+    self.lay(big ? "su" : "ss", 0, 0, 1)
+    var cx = big ? 7.5 : 10.5
+    var cy = big ? 7.5 : 4.5
+    var r = big ? 3.1 : 2.0
+    self.sp(cx + r * math.cos(t * 1.3), cy + r * math.sin(t * 1.3), 0xFFFFFF, 0.55)
+  end
+
+  # Stars twinkle, n of them
+  def stars(n, t)
+    var k = self.sk
+    for i : 0 .. n - 1
+      var w = 0.5 + 0.5 * math.sin(t * (1.3 + i * 0.37) + i * 2.1)
+      self.pt(k[i * 2], k[i * 2 + 1], i % 2 ? 0xB8C8FF : 0xFFFFFF, 0.15 + 0.85 * w * w)
+    end
+  end
+
+  # Falling particles from row y0 down: kind 0 rain drop, 1 snowflake, 2 hail, 3 drizzle.
+  # The count follows the real amount (qi), wind slants them (sl px sideways per px down).
+  def fall(n, o, x0, w, y0, spd, c, k, t)
+    var r = self.rn
+    var span = 18.0 - y0
+    var sl = self.sl
+    n = clamp(int(n * self.qi + 0.5), 2, 15)
+    spd = spd * (0.85 + 0.15 * self.qi)
+    for i : 0 .. n - 1
+      var y = y0 + (t * spd * (0.8 + 0.4 * r[i + o + 16]) + r[i + o + 32] * span) % span
+      var yy = int(y + 0.5)                      # whole pixels stay crisp on the LEDs
+      var x = int(x0 + r[i + o] * w + sl * (y - y0) + 16.5) % 16
+      if k == 0
+        self.pt(x, yy, c, 1.0)
+        self.pt(int(x - sl + 0.5), yy - 1, c, 0.45)
+        self.pt(int(x - 2 * sl + 0.5), yy - 2, c, 0.15)
+        if yy == 16
+          self.pt(x - 1, 15, c, 0.45)
+          self.pt(x + 1, 15, c, 0.45)
+        end
+      elif k == 1
+        var fx = x + int(math.sin(t * 2.2 + i * 2.3) * 1.2 + 10.5) - 10
+        self.pt(fx, yy, c, 1.0)
+        if i % 3 == 0                              # a few bigger flakes with soft arms
+          self.pt(fx - 1, yy, c, 0.35) self.pt(fx + 1, yy, c, 0.35)
+          self.pt(fx, yy - 1, c, 0.35) self.pt(fx, yy + 1, c, 0.35)
+        end
+      elif k == 2
+        if yy > 15 yy = 15 - (yy - 15) * 2 end    # stones bounce off the ground
+        self.pt(x, yy, c, 1.0)
+      else
+        self.pt(x, yy, c, 0.8)
+      end
+    end
+  end
+
+  # Dry for now, showers about: every 3 s one pale drop (or flake) drifts out of the cloud
+  def hint(y0, dr, t)
+    if self.wh == 0 return end
+    var u = t % 3.0
+    if u > 1.6 return end
+    var a = u < 0.3 ? u / 0.3 : 1 - (u - 0.3) / 1.3
+    var x = 5 + dr + (self.wh == 2 ? int(math.sin(t * 2.5) + 10.5) - 10 : 0)
+    self.pt(x, int(y0 + u * 2.2 + 0.5), self.wh == 2 ? 0xE8F0FF : 0x5AA0F0, a)
+  end
+
+  # The weather symbol k into the buffer; t = seconds
+  def icon(k, t)
+    var fb = self.fb
+    for i : 0 .. 255 fb[i] = 0 end
+    var dr = math.sin(t * (0.6 + min(self.wsv, 50) / 30.0)) > 0 ? 1 : 0   # clouds drift by 1 px, faster in wind
+    if k == 0
+      self.sun(true, t)
+    elif k == 1
+      self.stars(6, t)
+      var u = t % 7.0                                  # shooting star every 7 s
+      if u < 0.7
+        for j : 0 .. 4 self.sp(15.5 - u * 16 + j * 1.1, 8.5 + u * 7 - j * 0.48, 0xFFFFFF, (1 - u / 0.7) * (1 - j * 0.2)) end
+      end
+      self.lay("mo", 0, 0, 1)
+    elif k == 2
+      self.sun(false, t)
+      self.lay("sl", dr, 6, 1)
+      self.hint(11, dr, t)
+    elif k == 13
+      self.stars(3, t)
+      self.lay("ms", 0, 0, 1)
+      self.lay("sl", dr, 6, 1)
+      self.hint(11, dr, t)
+    elif k == 3
+      self.lay("kl", 1 - dr, 2, 1)
+      self.lay("sl", dr, 8, 1)
+      self.hint(13, dr, t)
+    elif k == 4
+      for r : 0 .. 4
+        for x : 0 .. 15
+          var v = 0.5 + 0.5 * math.sin(x * 0.55 + t * (r % 2 ? 1.3 : -1.0) + r * 1.7)
+          self.pt(x, 2 + r * 3, 0xC8CED8, 0.2 + 0.7 * v * v)
+        end
+      end
+    elif k == 5
+      self.fall(6, 0, 2, 12, 6, 4.5, 0x9CCBFF, 3, t)
+      self.lay("cl", dr, 1, 1)
+    elif k == 6
+      self.fall(10, 0, 1, 14, 6, 10.0, 0x4A9CFF, 0, t)
+      self.lay("cd", dr, 1, 1)
+    elif k == 7 || k == 12
+      if k == 7 self.sun(false, t) else self.stars(3, t) self.lay("ms", 0, 0, 1) end
+      self.fall(6, 3, 1, 10, 6, 9.0, 0x4A9CFF, 0, t)
+      self.lay("sl", dr, 4, 1)
+    elif k == 8
+      self.fall(10, 0, 1, 14, 6, 2.6, 0xFFFFFF, 1, t)
+      self.lay("cl", dr, 1, 1)
+    elif k == 9
+      var u = t % 3.4                                  # double flash
+      var fl = u < 0.09 || (u > 0.2 && u < 0.36)
+      self.fall(6, 5, 1, 14, 6, 10.0, 0x3A6CC0, 0, t)
+      var b = self.bolt
+      var ba = fl ? 1.0 : (u > 0.36 && u < 0.6 ? 0.5 : 0)
+      for j : 0 .. 7
+        if fl self.sp(b[j * 2] - 0.5, b[j * 2 + 1], 0xFFE060, 0.25) self.sp(b[j * 2] + 0.5, b[j * 2 + 1], 0xFFE060, 0.25) end
+        self.pt(b[j * 2], b[j * 2 + 1], fl ? 0xFFFBD0 : 0xFFD000, ba)
+      end
+      self.lay(fl ? "cf" : "ct", dr, 1, 1)
+    elif k == 10
+      self.fall(8, 0, 1, 14, 6, 13.0, 0xDDF4FF, 2, t)
+      self.lay("cd", dr, 1, 1)
+    elif k == 11
+      for j : 0 .. 2
+        var p = self.wp[j]
+        var n = size(p) / 2
+        var h = (t * (8 + min(self.wsv, 80) / 5.0) + j * 7) % (n + 9.0)   # gusts run faster in stronger wind
+        for i : 0 .. n - 1
+          var d = h - i
+          var a = d >= 0 && d < 6 ? 1.0 - d / 6.0 : 0
+          self.pt(p[i * 2], p[i * 2 + 1], self.mix(0x7FA8BC, 0xF4FCFF, a), 0.4 + 0.6 * a)
+        end
+      end
+    elif k == 14
+      self.fall(5, 0, 1, 14, 6, 9.0, 0x4A9CFF, 0, t)
+      self.fall(5, 9, 2, 12, 6, 2.6, 0xFFFFFF, 1, t)
+      self.lay("cd", dr, 1, 1)
+    end
+  end
+
+  # ---------- weather data ----------
+  # Colour of v from stops (lower bound, colour, ...) - the temperature stops unless s is given
+  def colour(v, s)
+    if s == nil s = self.st end
+    var n = size(s) - 2
+    if v <= s[0] return s[1] end
+    var j = 0
+    while j < n && v >= s[j + 2] j += 2 end
+    if j >= n return s[n + 1] end
+    return self.mix(s[j + 1], s[j + 3], (v - s[j]) * 1.0 / (s[j + 2] - s[j]))
+  end
+
+  # Glyphs, position and 5-step colour gradient of the temperature - once per update
+  def layout()
+    self.tg = nil
+    self.tu = nil
+    self.hg = nil
+    if self.traw == nil return end
+    var f = self.unit == "F"
+    var solo = self.hraw == nil || self.hum == "off" || self.hum == "alternate"   # temperature on its own
+    var v = f ? self.traw * 1.8 + 32 : self.traw
+    var r = int(v + (v >= 0 ? 0.5 : -0.5))
+    var g = []
+    if r < 0 g.push(10) end
+    var s = str(r < 0 ? -r : r)
+    for i : 0 .. size(s) - 1 g.push(int(s[i])) end
+    if f && !solo g.push(12) end
+    self.tg = g
+    if solo self.tu = [f ? 12 : 13] end          # on its own: ° ring and unit, "11°C"
+    var deg = f && !solo ? 0 : 4                 # the ° ring: 3 px plus a gap
+    self.nar = false
+    var tw = self.wid(g, false) - 1 + deg + (solo ? 7 : 0)
+    self.tx = 17 + (35 - tw) / 2
+    self.tc5 = self.grad(self.colour(self.traw))
+    if self.hraw == nil || self.hum == "off" return end
+
+    g = []
+    s = str(int(self.hraw + 0.5))
+    for i : 0 .. size(s) - 1 g.push(int(s[i])) end
+    g.push(11)
+    self.hg = g
+    self.hc5 = self.grad(self.hcol)
+    if self.hum == "alternate"
+      self.hx = 17 + (35 - (self.wid(g, false) - 1)) / 2
+      return
+    end
+    # Side by side in the 35 columns: full size, else narrow digits, else narrow without %
+    var hw = self.wid(g, false) - 1
+    if tw + 3 + hw > 35
+      self.nar = true
+      tw = self.wid(self.tg, true) - 1 + deg
+      hw = self.wid(g, true) - 1
+      if tw + 2 + hw > 35
+        g.pop()
+        hw -= 6
+      end
+    end
+    var gap = self.nar ? 2 : 3
+    self.tx = 17 + (35 - tw - gap - hw) / 2
+    self.hx = self.tx + tw + gap
+  end
+
+  # Width of a glyph list: 7 px per glyph (6 narrow), the slim 1 only 5
+  def wid(g, nar)
+    var w = 0
+    for d : g w += d == 1 ? 5 : (nar ? 6 : 7) end
+    return w
+  end
+
+  # 5-step vertical gradient for the block digits: lighter top, darker bottom
+  def grad(c)
+    var l = []
+    for i : 0 .. 4 l.push(self.mix(self.mix(c, 0xFFFFFF, 0.18), self.col(c, 0.62), i / 4.0)) end
+    return l
+  end
+
+  # Graph values for the current hour: 24 values over the columns 17-51, rows 11-15
+  def build()
+    var h0 = hour()
+    self.bh = h0
+    var N = size(self.hr)
+    if N < 2 return end
+    var nxt = self.view == "next24" || (self.view == "auto" && h0 >= 18)
+    self.today = !nxt
+    var a = nxt && h0 > 0 ? h0 : 0
+    if N - a < 2 a = 0 end
+    var n = N - a > 24 ? 24 : N - a
+    var lo = 999
+    var hi = -999
+    var fc = []
+    for i : 0 .. n - 1
+      var v = self.hr[a + i]
+      if v < lo lo = v end
+      if v > hi hi = v end
+      fc.push(self.colour(v))
+    end
+    var span = hi - lo
+    var fy = []
+    self.fx = []
+    for i : 0 .. n - 1
+      var dy = span <= 0 ? 2 : int((self.hr[a + i] - lo) * 4.0 / span + 0.5)
+      fy.push(15 - clamp(dy, 0, 4))
+      self.fx.push(17 + i * 34 / (n - 1))
+    end
+    self.ay = []
+    self.ac = []
+    self.ad = []
+    self.ab = []
+    var i = 0
+    for x : 17 .. 51
+      while i < n - 2 && x > self.fx[i + 1] i += 1 end
+      var q = (x - self.fx[i]) * 1.0 / (self.fx[i + 1] - self.fx[i])
+      var c = self.mix(fc[i], fc[i + 1], q)
+      self.ay.push(int(fy[i] + (fy[i + 1] - fy[i]) * q + 0.5))
+      self.ac.push(c)
+      self.ad.push(self.col(c, 0.3))
+      self.ab.push(self.col(c, 0.75))
+    end
+    self.tm = -1
+    self.tn = -1
+    var im = (24 - a) % 24
+    var inn = (36 - a) % 24
+    if nxt && im > 0 && im < n self.tm = self.fx[im] end
+    if inn < n self.tn = self.fx[inn] end
+  end
+
+  def on_body(w, status)
+    self.busy = false
+    if w == nil return end
+    var m = re.search("_2m\":([-0-9.]+)", w)
+    var c = re.search("code\":(\\d+)", w)
+    var h = re.search("_2m\":\\[([^\\]]*)", w)
+    var dm = re.search("is_day\":(\\d)", w)
+    var wm = re.search("wind_speed_10m\":([0-9.]+)", w)
+    var cm = re.search("cloud_cover\":(\\d+)", w)
+    var sm = re.search("sunshine_duration\":\\[([0-9.]+)", w)
+    var hm = re.search("humidity_2m\":([0-9.]+)", w)
+    var pm = re.search("precipitation\":([0-9.]+)", w)        # mm in these 15 minutes
+    var dw = re.search("wind_direction_10m\":(\\d+)", w)
+    var mt = re.search("minutely_15\":.\"time\":\\[(\\d+)", w)
+    var mq = re.search("precipitation\":\\[([^\\]]*)", w)
+    if m == nil || c == nil || h == nil return end
+    var t = num(m[1])
+    if t == nil return end
+    var hr = []
+    for s : re.matchall("[-0-9.]+", h[1])
+      var v = num(s)
+      hr.push(v == nil ? t : v)
+    end
+    if size(hr) < 2 return end
+    if hm != nil && num(hm[1]) != nil               # humidity is optional, never blocks the rest
+      self.hraw = num(hm[1])
+      store.set("hum_v", self.hraw)
+    end
+    self.traw = t
+    self.hr = hr
+    self.layout()
+    self.build()
+
+    # Symbols: 0 clear, 1 clear night, 2 partly, 3 cloudy, 4 fog, 5 drizzle, 6 rain, 7 showers,
+    # 8 snow, 9 thunder, 10 hail, 11 windy, 12 showers at night, 13 partly at night, 14 sleet
+    var k = int(num(c[1]))
+    var day = dm == nil || dm[1] == "1"
+    var cc = cm == nil ? nil : num(cm[1])
+    var sun = sm != nil && num(sm[1]) != nil && num(sm[1]) >= 450
+    var ic = 3
+    if k <= 3 && cc != nil
+      if cc >= self.cloud && !(day && sun)  ic = 3
+      elif cc >= self.cloud / 2              ic = day ? 2 : 13
+      else                                   ic = day ? 0 : 1
+      end
+    elif k == 0         ic = day ? 0 : 1
+    elif k <= 2         ic = day ? 2 : 13
+    elif k == 3         ic = 3
+    elif k <= 48        ic = 4
+    elif k == 56 || k == 57 || k == 66 || k == 67  ic = 14
+    elif k <= 57        ic = 5
+    elif k <= 67        ic = 6
+    elif k <= 77        ic = 8
+    elif k <= 82        ic = day ? 7 : 12
+    elif k <= 86        ic = 8
+    elif k == 95        ic = 9
+    elif k >= 96        ic = 10
+    end
+    var ws = wm == nil ? nil : num(wm[1])
+    if k <= 48 && ws != nil && ws >= self.wind ic = 11 end
+    # Rain, snow or showers in the code but nothing falling right now: the dry symbol by cloud cover,
+    # with a hint drop (or flake). Thunderstorms always stay.
+    var wh = 0
+    var pr = pm == nil ? nil : num(pm[1])
+    if k >= 51 && k <= 86 && pr != nil && pr <= 0
+      wh = (k >= 71 && k <= 77) || k >= 85 ? 2 : 1
+      ic = cc != nil && cc >= self.cloud ? 3 : (day ? 2 : 13)
+    end
+    self.wh = wh
+    store.set("wh", wh)
+    # Amount and wind for the falling particles; wind from the west slants them to the right
+    self.qi = pr == nil || pr <= 0 ? 1.0 : clamp(0.6 + pr * 0.8, 0.6, 1.6)
+    self.wsv = ws == nil ? 0 : ws
+    var wd = dw == nil ? nil : num(dw[1])
+    self.sl = ws == nil || wd == nil ? 0.0 : -math.sin(wd * 0.0174533) * clamp((ws - 5) / 45.0, 0, 1) * 0.8
+    store.set("qi", self.qi)
+    store.set("sl", self.sl)
+    store.set("wsv", self.wsv)
+    # Wind page: direction, gusts now, hourly wind and gusts
+    if wd != nil
+      self.wdv = wd
+      store.set("wdv", wd)
+    end
+    var gm = re.search("wind_gusts_10m\":([0-9.]+)", w)
+    self.wgv = gm == nil ? nil : num(gm[1])
+    if self.wgv != nil store.set("wgv", self.wgv) end
+    for j : 0 .. 1
+      var mm = re.search((j == 0 ? "wind_speed" : "wind_gusts") + "_10m\":\\[([^\\]]*)", w)
+      if mm != nil
+        var l = []
+        for s : string.split(mm[1], ",") l.push(num(s, 0)) end
+        if j == 0 self.whr = l else self.wgr = l end
+        store.set(j == 0 ? "whr" : "wgr", l)
+      end
+    end
+    self.wcalc()
+    # Rain of the next hours in 15-minute steps
+    if mt != nil && mq != nil
+      var l = []
+      for s : re.matchall("[0-9.]+", mq[1]) l.push(num(s)) end
+      if size(l) >= 4
+        self.mp = l
+        self.mt0 = int(num(mt[1]))
+        store.set("mp", l)
+        store.set("mt0", self.mt0)
+      end
+    end
+    self.rcalc()
+    # Daily: sunrise/sunset of today and the next days, forecast for tomorrow and two more days
+    var dt = re.search("daily\":.\"time\":\\[([^\\]]*)", w)
+    var da = []
+    for key : ["weather_code", "temperature_2m_max", "temperature_2m_min", "sunrise", "sunset", "probability_max"]
+      var mm = re.search(key + "\":\\[([^\\]]*)", w)
+      var l = []
+      if mm != nil for s : string.split(mm[1], ",") l.push(num(s)) end end
+      da.push(l)
+    end
+    if dt != nil && size(da[3]) >= 2 && size(da[4]) >= 2
+      self.sr = da[3]
+      self.su = da[4]
+      store.set("sr", self.sr)
+      store.set("su", self.su)
+    end
+    if dt != nil && size(da[0]) >= 4 && size(da[1]) >= 4 && size(da[2]) >= 4
+      var tl = string.split(dt[1], ",")
+      var fd = []
+      for i : 1 .. 3 fd.push([da[0][i], da[1][i], da[2][i], i < size(da[5]) ? da[5][i] : nil, num(tl[i])]) end
+      self.fd = fd
+      store.set("fd", fd)
+    end
+    self.scalc()
+    self.fcalc()
+    self.wk = ic
+    self.age = 0
+    store.set("temp", t)
+    store.set("wk", ic)
+    store.set("hr", hr)
+  end
+
+  # ---------- moon ----------
+  # Picture for the phase now, with the same windows as Home Assistant's moon sensor. The phase is the
+  # moon's true elongation from the sun (0 new, 0.5 full), so the lit share matches the real moon.
+  def phase()
+    var el = self.alt(epoch_ms() / 1000, true)
+    self.mf = el[0]
+    # Lit share in % and its block glyphs, once a minute
+    var p = int(el[1] * 100 + 0.5)
+    var ps = str(p)
+    var g = []
+    for j : 0 .. size(ps) - 1 g.push(int(ps[j])) end
+    g.push(11)
+    self.mpg = g
+    self.mpw = self.wid(g, false) - 1
+    var age = self.mf * 28
+    var lim = [0.5, 6.5, 7.5, 13.5, 14.5, 20.5, 21.5, 27.5]
+    var i = 0
+    while i < 8 && age >= lim[i] i += 1 end
+    i = i % 8
+    if i != self.mi
+      self.mi = i
+      # The pictures as they are. The new moon is almost black, too dark for any LED to light: its
+      # texture is stretched into a cool grey the LEDs show, soft at the rim; corners outside the disc stay black
+      var b = bytes(self.mh[i])
+      var mx = 1                                   # brightest pixel of the new moon picture
+      if i == 0
+        for j : 0 .. 255 mx = max(mx, b[j * 3] + b[j * 3 + 1] + b[j * 3 + 2]) end
+      end
+      var m = []
+      for j : 0 .. 255
+        var r = b[j * 3]
+        var g = b[j * 3 + 1]
+        var bl = b[j * 3 + 2]
+        if i == 0 && r + g + bl > 0
+          var cv = 0
+          for sy : 0 .. 3
+            for sx : 0 .. 3
+              var dx = j % 16 + (sx + 0.5) / 4 - 8.0
+              var dy = j / 16 + (sy + 0.5) / 4 - 8.0
+              if dx * dx + dy * dy <= 63.0 cv += 1 end
+            end
+          end
+          var f = math.pow((r + g + bl) * 1.0 / mx, 1.3)
+          var a = cv / 16.0
+          r = int((22 + 68 * f) * a)
+          g = int((24 + 70 * f) * a)
+          bl = int((30 + 74 * f) * a)
+        end
+        m.push((r << 16) | (g << 8) | bl)
+      end
+      self.mimg = m
+    end
+  end
+
+  # Moon height above the horizon at unix time u (seconds), as sin(altitude) minus the rise/set
+  # limit: low-precision lunar theory (Montenbruck & Pfleger), good to about a minute.
+  # With el: [phase 0..1 of the cycle from the longitudes (0 new, 0.5 full), lit share 0..1 from the
+  # true elongation, latitude included].
+  def alt(u, el)
+    var e = u - 946728000                       # since 2000-01-01 12:00 UTC
+    var fd = (e % 86400) / 86400.0
+    var d = (e / 86400) + fd
+    var T = d / 36525
+    var P = 6.283185307
+    var s = math.sin
+    var c = math.cos
+    var L0 = self.fr(0.606433 + 1336.855225 * T)
+    var l = P * self.fr(0.374897 + 1325.552410 * T)
+    var ls = P * self.fr(0.993133 + 99.997361 * T)
+    var D = P * self.fr(0.827361 + 1236.853086 * T)
+    var F = P * self.fr(0.259086 + 1342.227825 * T)
+    var dL = 22640 * s(l) - 4586 * s(l - 2 * D) + 2370 * s(2 * D) + 769 * s(2 * l) - 668 * s(ls) -
+             412 * s(2 * F) - 212 * s(2 * l - 2 * D) - 206 * s(l + ls - 2 * D) + 192 * s(l + 2 * D) -
+             165 * s(ls - 2 * D) - 125 * s(D) - 110 * s(l + ls) + 148 * s(l - ls) - 55 * s(2 * F - 2 * D)
+    var S = F + (dL + 412 * s(2 * F) + 541 * s(ls)) / 206264.8062
+    var h = F - 2 * D
+    var N = -526 * s(h) + 44 * s(l + h) - 31 * s(h - l) - 23 * s(ls + h) + 11 * s(h - ls) -
+            25 * s(F - 2 * l) + 21 * s(F - l)
+    var lm = P * self.fr(L0 + dL / 1296000)
+    var bm = (18520 * s(S) + N) / 206264.8062
+    if el
+      var dl = lm - P * self.fr(0.7859453 + ls / P + (6893 * s(ls) + 72 * s(2 * ls) + 6191.2 * T) / 1296000)
+      return [self.fr(dl / P), (1 - c(bm) * c(dl)) / 2]
+    end
+    var x = c(bm) * c(lm)
+    var y = c(bm) * s(lm)
+    var z = s(bm)
+    var ra = math.atan2(y * 0.917482 - z * 0.397777, x)
+    var de = math.asin(y * 0.397777 + z * 0.917482)
+    var ha = (280.46061837 + 360 * fd + 0.98564736629 * d + self.lon) * 0.0174532925 - ra
+    var la = self.lat * 0.0174532925
+    return s(la) * s(de) + c(la) * c(de) * c(ha) - 0.002327
+  end
+
+  def hm(m)
+    if m < 0 return "--:--" end
+    m = m % 1440
+    if settings.get("time24h") == false          # 12-hour clock: 7:45A / 6:42P
+      var h = m / 60 % 12
+      return string.format("%d:%02d%s", h == 0 ? 12 : h, m % 60, m < 720 ? "A" : "P")
+    end
+    return string.format("%02d:%02d", m / 60, m % 60)
+  end
+
+  # First moonrise and moonset from today 0:00 on (today's, else tomorrow's), every 20 min + interpolation
+  def mcalc()
+    var e = epoch_ms()
+    if e < 0 || hour() < 0 return end
+    var t0 = e / 1000 - (hour() * 3600 + minute() * 60 + second())
+    self.mr = -1
+    self.mst = -1
+    var p = self.alt(t0)
+    for i : 1 .. 144
+      var v = self.alt(t0 + i * 1200)
+      if (p < 0) != (v < 0)
+        var m = int(((i - 1) * 1200 + 1200 * p / (p - v)) / 60)
+        if v >= 0 && self.mr < 0 self.mr = m end
+        if v < 0 && self.mst < 0 self.mst = m end
+      end
+      p = v
+      if self.mr >= 0 && self.mst >= 0 break end
+    end
+    self.rs = self.hm(self.mr)
+    self.ss = self.hm(self.mst)
+    self.mtw = text_ink_width(self.rs)
+  end
+
+  # ---------- rain page ----------
+  # Bars and text for the next 3 hours (12 x 15 min) from the slot we are in now; once a minute
+  def rcalc()
+    var e = epoch_ms()
+    if e < 0 || hour() < 0 || self.mp == nil return end
+    var now = e / 1000
+    var off = hour() * 3600 + minute() * 60 + second() - now % 86400   # local time minus UTC
+    if off > 50400 off -= 86400 end
+    if off < -43200 off += 86400 end
+    var j = (now - self.mt0) / 900
+    if j < 0 j = 0 end
+    var n = size(self.mp)
+    var first = -1
+    var dry = -1
+    var bh = []
+    var bc = []
+    var tk = []
+    for i : 0 .. 11
+      var k = j + i
+      var mm = k < n ? self.mp[k] : 0
+      if mm >= 0.1 && first < 0 first = i end
+      if mm < 0.1 && dry < 0 && i > 0 dry = i end
+      bh.push(mm < 0.05 ? 0 : clamp(int(math.ceil(8 * math.sqrt(min(mm, 2.5) / 2.5))), 1, 8))
+      var f = clamp(mm / 2.5, 0, 1)
+      bc.push(f < 0.5 ? self.mix(0x8CC8FF, 0x2F7CFF, f * 2) : self.mix(0x2F7CFF, 0x9A50F0, (f - 0.5) * 2))
+      tk.push((self.mt0 + k * 900 + off) % 3600 == 0)
+    end
+    self.rbh = bh
+    self.rbc = bc
+    self.rtk = tk
+    self.rq = j < n ? self.mp[j] : 0
+    var s
+    if first == 0                                # raining now: until when?
+      self.rst = 2
+      s = dry < 0 ? (self.de ? "> 3 STD" : "> 3 H") : (self.de ? "BIS " : "ENDS ") + self.hm(((self.mt0 + (j + dry) * 900 + off) % 86400) / 60)
+      if text_ink_width(s) > 35 s = "-" + self.hm(((self.mt0 + (j + dry) * 900 + off) % 86400) / 60) end
+      self.rtc = 0x8CC8FF
+    elif first > 0                               # dry now: when does it start?
+      self.rst = 1
+      var m = (self.mt0 + (j + first) * 900 - now) / 60
+      m = ((m < 1 ? 1 : m) + 4) / 5 * 5
+      s = m < 60 ? "IN " + str(m) + " MIN" : (self.de ? "AB " : "AT ") + self.hm(((self.mt0 + (j + first) * 900 + off) % 86400) / 60)
+      if text_ink_width(s) > 35 s = m < 60 ? "IN " + str(m) + "M" : self.hm(((self.mt0 + (j + first) * 900 + off) % 86400) / 60) end
+      self.rtc = 0xFFFFFF
+    else
+      self.rst = 0
+      s = self.de ? "TROCKEN" : "DRY"
+      self.rtc = 0xFFD860
+    end
+    self.rtt = s
+    self.rtx = 17 + (35 - text_ink_width(s)) / 2
+  end
+
+  # ---------- wind page ----------
+  # Speed and gusts as block digits, direction (or "gusts") and unit beside them; the next 12 hours
+  # as bars (mean wind, gusts as a faint bar above). Once per update and every hour.
+  def wcalc()
+    var u = self.wunit
+    var ul = u == "m/s" ? "M/S" : (u == "mph" ? "MPH" : (u == "kn" ? "KN" : (u == "Bft" ? "BFT" : "KM/H")))
+    var dl = self.de ? ["N", "NO", "O", "SO", "S", "SW", "W", "NW"] : ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    self.wnc = self.colour(self.wsv, self.wst)
+    self.wv = []
+    if self.wdv != nil                           # nothing known before the first update
+      for j : 0 .. 1
+        var v = j == 0 ? self.wsv : self.wgv
+        if v == nil || (j == 1 && v < self.wsv + 3) continue end     # gusts only when they stand out
+        var r = 0
+        if u == "Bft"
+          for b : [1, 6, 12, 20, 29, 39, 50, 62, 75, 89, 103, 118] if v >= b r += 1 end end
+        else
+          r = int(v / (u == "m/s" ? 3.6 : (u == "mph" ? 1.609 : (u == "kn" ? 1.852 : 1.0))) + 0.5)
+        end
+        var g = []
+        var s = str(r)
+        for i : 0 .. size(s) - 1 g.push(int(s[i])) end
+        var lab = j == 1 ? (self.de ? "B\xC3\x96EN" : "GUST") : (self.wsv < 2 ? (self.de ? "STILL" : "CALM") : dl[int((self.wdv + 22.5) / 45) % 8])
+        var lw = max(text_ink_width(lab), text_ink_width(ul))
+        var nar = false
+        var gw = self.wid(g, false) - 1
+        if gw + 2 + lw > 35
+          nar = true
+          gw = self.wid(g, true) - 1
+        end
+        var x = max(17, 17 + (35 - gw - 2 - lw) / 2)
+        self.wv.push({"g": g, "nar": nar, "c5": self.grad(self.colour(v, self.wst)), "x": x, "rx": x + gw + 2,
+                      "lab": lab, "lc": j == 0 ? 0xF2F2F6 : 0xC8D0DC, "u": ul})
+      end
+    end
+    # Bars: 5 rows for up to 75 km/h (square root, so light wind still shows), hourly data from 0:00
+    self.wb = []
+    var h = hour()
+    if h < 0 return end
+    for i : 0 .. 11
+      var k = h + i
+      var v = k < size(self.whr) ? self.whr[k] : nil
+      var gv = k < size(self.wgr) ? self.wgr[k] : nil
+      var hh = k % 24
+      self.wb.push([v == nil ? 0 : 5 * math.sqrt(min(v, 75) / 75.0), v == nil ? 0 : self.colour(v, self.wst),
+                    gv == nil ? 0 : int(5 * math.sqrt(min(gv, 75) / 75.0) + 0.5),
+                    gv == nil ? 0 : self.col(self.colour(gv, self.wst), 0.3),
+                    hh == 0 ? self.mcol : (hh == 12 ? self.ncol : 0)])
+    end
+  end
+
+  # ---------- sun and forecast pages ----------
+  # Local time minus UTC in seconds
+  def tzo()
+    var now = epoch_ms() / 1000
+    var off = hour() * 3600 + minute() * 60 + second() - now % 86400
+    if off > 50400 off -= 86400 end
+    if off < -43200 off += 86400 end
+    return off
+  end
+
+  # Sunrise and sunset of today; after today's sunset those of tomorrow. The next one is lit.
+  def scalc()
+    var e = epoch_ms()
+    if e < 0 || hour() < 0 || self.sr == nil || size(self.sr) < 2 || size(self.su) < 2 return end
+    var now = e / 1000
+    var off = self.tzo()
+    var i = now >= self.su[0] ? 1 : 0
+    self.srs = self.hm(((int(self.sr[i]) + off) % 86400) / 60)
+    self.sss = self.hm(((int(self.su[i]) + off) % 86400) / 60)
+    self.snev = now < self.sr[i] ? 1 : (now < self.su[i] ? 2 : 0)
+    self.stw = text_ink_width(self.srs)
+  end
+
+  # Weather code of a day -> symbol (daytime)
+  def wkind(k)
+    if k == nil return 3 end
+    if k == 0 return 0 end
+    if k <= 2 return 2 end
+    if k == 3 return 3 end
+    if k <= 48 return 4 end
+    if k == 56 || k == 57 || k == 66 || k == 67 return 14 end
+    if k <= 55 return 5 end
+    if k <= 65 return 6 end
+    if k <= 77 || k == 85 || k == 86 return 8 end
+    if k <= 82 return 7 end
+    if k == 95 return 9 end
+    return 10
+  end
+
+  # Everything the forecast page draws per day, built once per update
+  def fcalc()
+    self.fdd = []
+    if size(self.fd) == 0 || epoch_ms() < 0 || hour() < 0 return end
+    var off = self.tzo()
+    var wd = self.de ? ["SO", "MO", "DI", "MI", "DO", "FR", "SA"] : ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
+    var f = self.unit == "F"
+    var j = 0
+    for d : self.fd
+      if d[1] == nil || d[2] == nil continue end
+      var hi = f ? d[1] * 1.8 + 32 : d[1]
+      var lo = f ? d[2] * 1.8 + 32 : d[2]
+      var g = []
+      var r = int(hi + (hi >= 0 ? 0.5 : -0.5))
+      if r < 0 g.push(10) end
+      var s = str(r < 0 ? -r : r)
+      for i : 0 .. size(s) - 1 g.push(int(s[i])) end
+      var bw = self.wid(g, false) - 1 + (f ? 0 : 4)
+      var lr = int(lo + (lo >= 0 ? 0.5 : -0.5))
+      var mn = str(lr) + (f ? "" : "°")
+      var pr = d[3] != nil && d[3] >= 10 ? str(int(d[3])) + "%" : ""   # rain chance, top right
+      var x = 17 + (35 - bw - 3 - text_ink_width(mn)) / 2
+      var lab = "--"                              # weekday and date, or just the weekday next to the rain chance
+      if d[4] != nil
+        var dn = (int(d[4]) + off + 43200) / 86400       # days since 1970 (local noon)
+        var z = dn + 719468                               # civil date from days
+        var era = z / 146097
+        var doe = z - era * 146097
+        var yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+        var doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+        var mp = (5 * doy + 2) / 153
+        var dd = doy - (153 * mp + 2) / 5 + 1
+        var mo = mp < 10 ? mp + 3 : mp - 9
+        lab = wd[(dn + 4) % 7]
+        if pr == "" lab += " " + (self.de ? string.format("%02d.%02d", dd, mo) : str(dd)) end
+      end
+      self.fdd.push({"k": self.wkind(d[0] == nil ? nil : int(d[0])), "g": g, "c5": self.grad(self.colour(d[1])),
+                     "x": x, "rx": x + bw + 3, "mn": mn, "mc": self.colour(d[2]), "pr": pr, "px": 52 - text_ink_width(pr),
+                     "lab": lab, "lc": j == 0 ? 0xF2F2F6 : 0xB8B8C4})
+      j += 1
+    end
+  end
+
+  # ---------- lifecycle ----------
+  def loop()
+    var h = hour()
+    if h < 0 return end
+    var d = day()
+    if d != self.mday
+      if self.mday >= 0 self.ticks = 0 end
+      self.mday = d
+      self.mcalc()
+    end
+    if h != self.mhr
+      self.mhr = h
+      self.build()
+      self.wcalc()
+    end
+    var mi = h * 60 + minute()
+    if mi != self.mmin
+      self.mmin = mi
+      self.phase()
+      self.nx = self.today && size(self.ay) > 0 ? clamp(mi * 34 / 1380, 0, 34) : -1
+      # Which moon event comes next - that one is lit, the other dimmed
+      var r = self.mr > mi ? self.mr : 99999
+      var s = self.mst > mi ? self.mst : 99999
+      self.nev = r == s ? 0 : (r < s ? 1 : 2)
+      self.rcalc()
+      self.scalc()
+    end
+    self.age += 1
+    if self.ticks <= 0 && !self.busy
+      self.ticks = 15 * 60
+      self.busy = true
+      http.get(self.url, / b, st -> self.on_body(b, st), {'find': "\"current\":", 'keep': 8000})
+    end
+    self.ticks -= 1
+  end
+
+  # Auto mode (idea and first version by DennsDJ): how long one page stays. The 3-day forecast
+  # needs 3 x 3.5 s, moon and wind 8 s so the lit share and the gusts (after 4 s) are seen too.
+  def pdur(k)
+    var d = self.psec
+    if k == 4 && d < 10500 d = 10500 end
+    if (k == 2 || k == 5) && d < 8000 d = 8000 end
+    return d
+  end
+
+  def duration()
+    if !self.auto return self.dur * 1000 end
+    var d = 0
+    for k : self.pages d += self.pdur(k) end
+    return d
+  end
+
+  # Auto mode: the next page slides in; the last one stays until the rotation moves on
+  def anext()
+    self.atid = nil
+    if self.pi >= size(self.pages) - 1 return end
+    self.pp = self.pi
+    self.tp = self.ps
+    self.pi += 1
+    self.ps = now_ms()
+    self.ts = self.ps
+    if self.pi < size(self.pages) - 1 self.atid = timer.after(self.pdur(self.pages[self.pi]), / -> self.anext()) end
+  end
+
+  def on_show()
+    self.pi = 0                                  # always start with the weather
+    self.pp = -1
+    if self.atid != nil timer.cancel(self.atid) self.atid = nil end
+    if self.auto && size(self.pages) > 1 self.atid = timer.after(self.pdur(0), / -> self.anext()) end
+    self.ps = now_ms()
+    self.ts = self.ps - 99999
+  end
+
+  def on_hide()
+    if self.atid != nil
+      timer.cancel(self.atid)
+      self.atid = nil
+    end
+    if self.tid != nil
+      timer.cancel(self.tid)
+      self.tid = nil
+      rotation.resume()
+    end
+  end
+
+  # Knob: right = next page (weather -> rain -> wind -> ... -> moon), left = back. While someone turns it the
+  # rotation waits; `hold` seconds after the last turn it moves on.
+  def on_knob(ev)
+    if self.auto || size(self.pages) < 2 || (ev != "left" && ev != "right") return false end   # auto: knob keeps brightness/volume
+    var p = clamp(self.pi + (ev == "right" ? 1 : -1), 0, size(self.pages) - 1)
+    if p != self.pi
+      self.pp = self.pi
+      self.tp = self.ps
+      self.pi = p
+      self.ps = now_ms()
+      self.ts = self.ps
+    end
+    rotation.pause()
+    if self.tid != nil timer.cancel(self.tid) end
+    self.tid = timer.after(self.hold * 1000, def ()
+      self.tid = nil
+      rotation.resume()
+      rotation.next()
+    end)
+    return true
+  end
+
+  # ---------- drawing ----------
+  # Block digits 6x10 (narrow: middle column 1 px); i0 = position in the drop-in order
+  def glyphs(g, x, g5, oy, t, i0, sw)
+    var nar = self.nar
+    var i = i0
+    for d : g
+      var e = clamp((t - 0.15 - i * 0.09) / 0.42, 0, 1)
+      var q = e - 1
+      var yo = int(math.floor((2.7 * q * q * q + 1.7 * q * q) * 11 + 0.5)) + oy
+      self.ly = yo
+      var b = d == 1 ? 0 : self.bm[d]
+      for r : 0 .. 4
+        for k : 0 .. 2
+          var on = d == 1 ? (k == 1 || (k == 0 && r == 1)) : ((b >> (14 - r * 3 - k)) & 1) == 1
+          if on
+            var bx = x + k * 2                     # slim 1: flag + 2 px stem, no foot
+            var bw = 2
+            if nar && d != 1
+              bx = x + (k == 0 ? 0 : k + 1)
+              bw = k == 1 ? 1 : 2
+            end
+            var c = g5[r]
+            var s = bx - self.tx + r * 2 - sw
+            if s > -3 && s < 3 c = self.mix(c, 0xFFFFFF, 0.75 * (1 - (s < 0 ? -s : s) / 3.0)) end
+            rect_fill(bx, r * 2 + yo, bw, 2, c)
+          end
+        end
+      end
+      x += d == 1 ? 5 : (nar ? 6 : 7)
+      i += 1
+    end
+    return x
+  end
+
+  # Weather view, shifted by oy rows; t = seconds since shown
+  def wview(oy, t)
+    if self.tg == nil
+      text(23, 10 + oy, "...", 0x666666)
+    end
+    # Symbol fades in
+    if self.wk >= 0
+      self.icon(self.wk, t)
+      var f = clamp(t / 0.4, 0, 1)
+      var fb = self.fb
+      for i : 0 .. 255
+        var c = fb[i]
+        if c pixel(i % 16, i / 16 + oy, f < 1 ? self.col(c, f) : c) end
+      end
+    end
+    if self.tg == nil return end
+
+    # Temperature (and humidity): digits drop in one after another, colour gradient, a shine every 4 s.
+    # "wechselnd" swaps them every 4 s, each swap drops the digits in again.
+    var sw = t < 1.2 ? -99 : ((t - 1.2) % 4.0) * 26 - 6
+    var alt = self.hum == "alternate" && self.hg != nil
+    var ph = alt ? int(t / 4.0) % 2 : 0
+    var tt = alt ? t % 4.0 : t
+    if ph == 0
+      var x = self.glyphs(self.tg, self.tx, self.tc5, oy, tt, 0, sw)
+      if self.unit != "F" || self.tu != nil rect(x, self.ly, 3, 3, self.tc5[0]) end      # the ° ring
+      if self.tu != nil self.glyphs(self.tu, x + 4, self.tc5, oy, tt, size(self.tg), sw) end   # C or F
+    end
+    if self.hg != nil && (!alt || ph == 1)
+      self.glyphs(self.hg, self.hx, self.hc5, oy, tt, alt ? 0 : size(self.tg), sw)
+    end
+
+    # Forecast area wipes in from the left; the current hour pulses
+    var wv = int(clamp((t - 0.35) / 0.8, 0, 1) * 35)
+    var pl = 0.6 + 0.4 * math.sin(t * 4)
+    i = 0
+    for y : self.ay
+      if i >= wv break end
+      var lit = i == self.nx
+      pixel(17 + i, y + oy, lit ? self.mix(self.ac[i], 0xFFFFFF, pl) : self.ac[i])
+      if y < 15 rect_fill(17 + i, y + 1 + oy, 1, 15 - y, lit ? self.ab[i] : self.ad[i]) end
+      i += 1
+    end
+    if wv >= 35
+      if self.tm >= 0 pixel(self.tm, 10 + oy, self.mcol) end
+      if self.tn >= 0 pixel(self.tn, 10 + oy, self.ncol) end
+    end
+    if self.age > 15 * 60 + 600 pixel(16, 15 + oy, 0xFF0000) end   # data overdue
+  end
+
+  # Rain page: umbrella (open with drops while it rains, a single drop when rain is coming, furled
+  # when it stays dry), when it starts or stops, and the next 3 hours as 15-minute bars
+  def rview(oy, t)
+    var fb = self.fb
+    for i : 0 .. 255 fb[i] = 0 end
+    var st = self.rst
+    if st == 0
+      self.lay("uz", 0, 0, 1)
+      var gy = int((t % 3.5) * 6)                # a gleam runs down the furled cloth
+      if gy >= 4 && gy <= 10 && gy != 6 self.pt(7, gy, 0xFFFFFF, 0.55) end
+    else
+      var ut = self.ut
+      if st == 2
+        var r = self.rn
+        var n = clamp(int(4 + self.rq * 5), 3, 10)
+        for i : 0 .. n - 1
+          var x = 1 + int(r[i + 3] * 14)
+          var top = ut[x]
+          var span = top + 2.0
+          var yy = int((t * 9 * (0.8 + 0.4 * r[i + 19]) + r[i + 35] * span) % span - 1.5)
+          if yy < top
+            self.pt(x, yy, 0x5AA0F0, 1.0)
+            self.pt(x, yy - 1, 0x5AA0F0, 0.4)
+          elif yy == top                         # splashes off the canopy
+            self.pt(x - 1, top - 1, 0x8CC8FF, 0.6)
+            self.pt(x + 1, top - 1, 0x8CC8FF, 0.6)
+          end
+        end
+        for j : 0 .. 1                           # drips off both ends of the canopy
+          var u = (t + j * 0.55) % 1.1
+          self.pt(j == 0 ? 1 : 15, int(8 + u * 7), 0x5AA0F0, 1 - u / 1.1)
+        end
+      else
+        var u = t % 3.0                          # rain coming: now and then one drop
+        var yy = int(u * 3.2 - 1)
+        if u < 1.4 && yy < ut[5] self.pt(5, yy, 0x5AA0F0, u < 0.3 ? u / 0.3 : 1.0) end
+      end
+      self.lay("uo", 0, 0, 1)
+    end
+    var f = clamp(t / 0.4, 0, 1)
+    for i : 0 .. 255
+      var c = fb[i]
+      if c pixel(i % 16, i / 16 + oy, f < 1 ? self.col(c, f) : c) end
+    end
+
+    # Text slides in from the right, bars grow one after another; hour marks on the base line
+    var e = self.ez((t - 0.2) / 0.5)
+    text(self.rtx + int((1 - e) * 36), 6 + oy, self.rtt, self.rtc)
+    for i : 0 .. 11
+      var x = 17 + i * 3
+      var hh = int(self.rbh[i] * clamp((t - 0.35 - i * 0.05) / 0.3, 0, 1) + 0.5)
+      if hh <= 0
+        rect_fill(x, 15 + oy, 2, 1, 0x1C2028)
+      else
+        for yy : 0 .. hh - 1
+          rect_fill(x, 15 - yy + oy, 2, 1, yy == hh - 1 ? self.mix(self.rbc[i], 0xFFFFFF, 0.3) : self.rbc[i])
+        end
+      end
+      if i > 0 && self.rtk[i] pixel(x - 1, 15 + oy, 0x505060) end
+    end
+  end
+
+  # Sun page symbol: the sun on the horizon, rays breathing, glitter on the water below
+  def sicon(t)
+    var fb = self.fb
+    for i : 0 .. 255 fb[i] = 0 end
+    var pa = 0.5 + 0.5 * math.sin(t * 2.4)
+    for j : 0 .. 6
+      var an = 3.1416 + j * 0.5236                       # 180..360 degrees: upper half only
+      var a = j % 2 ? pa : 1 - pa
+      for d : [6.4, 7.4]
+        var x = int(8.0 + math.cos(an) * d)
+        var y = int(12.0 + math.sin(an) * d)
+        if y < 12 self.pt(x, y, d < 7 ? 0xFFC830 : 0xFF9A10, d < 7 ? 0.5 + 0.5 * a : a) end
+      end
+    end
+    self.lay("hs", 0, 0, 1)
+    for x : 0 .. 15                                      # horizon, brightest under the sun
+      var dx = (x + 0.5 - 8.0) / 8.0
+      self.pt(x, 12, 0xFF9A40, 1 - dx * dx * 0.8)
+    end
+    for i : 0 .. 4                                       # glitter on the water
+      var w = 0.5 + 0.5 * math.sin(t * (2.0 + i * 0.6) + i * 1.9)
+      var x = 4 + (i * 5) % 9
+      self.pt(x, 13 + i % 3, 0xFFB050, 0.6 * w * w)
+      self.pt(x + 1, 13 + i % 3, 0xFFB050, 0.4 * w * w)
+    end
+  end
+
+  # Wind page symbol: a compass rose. The needle points where the wind blows to, its dim tail where it
+  # comes from. It swings in from north, then trembles with the gusts; air streams across the dial.
+  def wrose(t)
+    var fb = self.fb
+    for i : 0 .. 255 fb[i] = 0 end
+    self.lay("wr", 0, 0, 1)
+    var v = self.wsv
+    if self.wdv == nil || v < 2                  # calm or unknown: only the hub breathes
+      var a = 0.45 + 0.35 * math.sin(t * 2.0)
+      for y : 7 .. 8
+        for x : 7 .. 8 self.pt(x, y, 0xC8D0DC, a) end
+      end
+      return
+    end
+    var n = (self.wdv + 180) % 360
+    if n > 180 n -= 360 end
+    var g = self.wgv == nil ? 0 : clamp((self.wgv - v) / (v < 10 ? 10.0 : v), 0, 1)
+    var a = (n - n * math.exp(-2.2 * t) * math.cos(4.5 * t) +
+             (2 + 10 * g) * (math.sin(t * 3.1) + 0.4 * math.sin(t * 7.7))) * 0.0174533
+    var ux = math.sin(a)
+    var uy = -math.cos(a)
+    var r = self.rn
+    for i : 0 .. clamp(int(v / 7) + 1, 1, 6) - 1
+      var p = (t * (2.5 + v / 8.0) * (0.8 + 0.4 * r[i + 40]) + r[i + 20] * 12) % 12.0 - 6
+      var q = (r[i + 50] - 0.5) * 9
+      if p * p + q * q < 30 self.sp(7.5 + p * ux - q * uy, 7.5 + p * uy + q * ux, 0x8CB4D8, 0.45 * (1 - (p < 0 ? -p : p) / 6.0)) end
+    end
+    var s = -4.5
+    while s <= 5.0
+      self.sp(7.5 + s * ux, 7.5 + s * uy, s > 0 ? self.wnc : 0x7A8696, s > 0 ? 1.0 : 0.8)
+      s += 0.5
+    end
+    var tx = 7.5 + 5.2 * ux
+    var ty = 7.5 + 5.2 * uy
+    for k : 1 .. 5                               # arrow head: two barbs back from the tip
+      var b = k * 0.55
+      self.sp(tx + b * (-ux * 0.819 + uy * 0.574), ty + b * (-ux * 0.574 - uy * 0.819), self.wnc, 1.0)
+      self.sp(tx + b * (-ux * 0.819 - uy * 0.574), ty + b * (ux * 0.574 - uy * 0.819), self.wnc, 1.0)
+    end
+  end
+
+  # Wind page: rose, speed <-> gusts every 4 s (soft cross-fade), the next 12 hours as bars
+  def windv(oy, t)
+    self.wrose(t)
+    self.out(0, oy, clamp(t / 0.4, 0, 1))
+    var V = self.wv
+    var n = size(V)
+    if n == 0
+      text(30, 6 + oy, "...", 0x666666)
+    else
+      var ph = n > 1 ? int(t / 4.0) % 2 : 0
+      var u = t - int(t / 4.0) * 4.0
+      var f = 1.0
+      if n > 1
+        f = clamp((4.0 - u) / 0.35, 0, 1)
+        if t >= 4 f = f * clamp(u / 0.35, 0, 1) end
+      end
+      var D = V[ph]
+      var c = self.wc5f
+      for i : 0 .. 4 c[i] = self.col(D["c5"][i], f) end
+      var nr = self.nar
+      self.nar = D["nar"]
+      self.glyphs(D["g"], D["x"], c, oy, t < 4 ? t : 9.0, 0, -99)
+      self.nar = nr
+      var xo = int((1 - self.ez((t - 0.3) / 0.5)) * 36)
+      text(D["rx"] + xo, 5 + oy, D["lab"], self.col(D["lc"], f))
+      text(D["rx"] + xo, 11 + oy, D["u"], self.col(0x8A92A2, f))   # a free row below the direction
+    end
+    if size(self.wb) < 12 return end
+    for i : 0 .. 11
+      var B = self.wb[i]
+      var x = 17 + i * 3
+      var e = clamp((t - 0.35 - i * 0.05) / 0.3, 0, 1)
+      var h = B[0] * e
+      var k = int(h)
+      if h < 0.2 rect_fill(x, 15 + oy, 2, 1, 0x1C2028) end
+      for yy : 0 .. k - 1 rect_fill(x, 15 - yy + oy, 2, 1, B[1]) end
+      if h - k > 0.2 rect_fill(x, 15 - k + oy, 2, 1, self.col(B[1], h - k)) end
+      for yy : int(math.ceil(h)) .. int(B[2] * e + 0.5) - 1 rect_fill(x, 15 - yy + oy, 2, 1, B[3]) end   # gusts
+      if i > 0 && B[4] pixel(x - 1, 15 + oy, B[4]) end
+    end
+  end
+
+  def sview(oy, t)
+    self.sicon(t)
+    self.out(0, oy, clamp(t / 0.4, 0, 1))
+    self.rows(oy, t, self.srs, self.sss, self.snev, 0xFFD040, 0xFF7A30, self.stw)
+  end
+
+  # Two rows: arrow up + rise time, arrow down + set time; they slide in from the right.
+  # The next event is lit, the other dimmed; the arrows nudge in their direction.
+  def rows(oy, t, a, b, ev, c1, c2, tw, f)
+    if f == nil f = 1.0 end                      # optional fade 0..1
+    var gx = 17 + (35 - 7 - tw) / 2
+    for r : 0 .. 1
+      var e = self.ez((t - 0.25 - r * 0.15) / 0.5)
+      var xo = int((1 - e) * 36)
+      var dim = ev != 0 && ev != r + 1
+      var ac = r == 0 ? c1 : c2
+      ac = self.col(ac, dim ? 0.4 * f : f)
+      var by = r == 0 ? 1 : 10
+      var bob = (t + r * 1.0) % 2.0 < 0.45 ? (r == 0 ? -1 : 1) : 0
+      var ax = gx + xo
+      var ar = r == 0 ? [4, 14, 31, 4, 4] : [4, 4, 31, 14, 4]
+      for yy : 0 .. 4
+        for xx : 0 .. 4
+          if (ar[yy] >> (4 - xx)) & 1 pixel(ax + xx, by + yy + bob + oy, ac) end
+        end
+      end
+      text(ax + 7, by + 5 + oy, r == 0 ? a : b, self.col(dim ? 0x707078 : 0xF2F2F6, f))
+    end
+  end
+
+  # One forecast day at ox: symbol, weekday + rain chance on top, max as block digits, min beside it
+  def fday(d, ox, oy, t)
+    var D = self.fdd[d]
+    var w = self.wh
+    var q = self.qi
+    var s = self.sl
+    self.wh = 0                                  # the day's symbol, not today's rain amount or wind
+    self.qi = 1.0
+    self.sl = 0.0
+    self.icon(D["k"], t)
+    self.wh = w
+    self.qi = q
+    self.sl = s
+    self.out(ox, oy, 1)
+    text(17 + ox, 5 + oy, D["lab"], D["lc"])
+    if D["pr"] != "" text(D["px"] + ox, 5 + oy, D["pr"], 0x5AA0F0) end
+    var nr = self.nar
+    self.nar = false
+    var x = self.glyphs(D["g"], D["x"] + ox, D["c5"], oy + 6, 9.0, 0, -99)
+    self.nar = nr
+    if self.unit != "F" rect(x, oy + 6, 3, 3, D["c5"][0]) end
+    text(D["rx"] + ox, 16 + oy, D["mn"], D["mc"])
+  end
+
+  # Three days, 3.5 s each; the next day pushes the last one out to the left
+  def fview(oy, t)
+    var n = size(self.fdd)
+    if n == 0
+      text(30, 10 + oy, "...", 0x666666)
+      return
+    end
+    var d = int(t / 3.5) % n
+    var u = t - int(t / 3.5) * 3.5
+    if t >= 3.5 && u < 0.4
+      var xo = int((1 - self.ez(u / 0.4)) * 52 + 0.5)
+      self.fday((d + n - 1) % n, xo - 52, oy, t)
+      self.fday(d, xo, oy, t)
+    else
+      self.fday(d, 0, oy, t)
+    end
+  end
+
+  # Moon view, shifted by oy rows; t = seconds since the switch
+  def mview(oy, t)
+    var m = self.mimg
+    if m != nil
+      var sw = t < 0.8 ? -99 : ((t - 0.8) % 4.5) * 12 - 6   # soft gleam across the lit part
+      var i = 0
+      for y : 0 .. 15
+        for x : 0 .. 15
+          var c = m[i]
+          if c
+            var s = x + y - sw
+            if s > -2.5 && s < 2.5 && ((c >> 8) & 255) > 110
+              c = self.mix(c, 0xFFFFFF, 0.4 * (1 - (s < 0 ? -s : s) / 2.5))
+            end
+            pixel(x, y + oy, c)
+          end
+          i += 1
+        end
+      end
+    end
+
+    # Every 4 s a soft cross-fade: moonrise/moonset <-> lit share in % with the lunar cycle line
+    var ph = int(t / 4.0) % 2
+    var u = t - int(t / 4.0) * 4.0
+    var f = clamp((4.0 - u) / 0.35, 0, 1)
+    if t >= 4 f = f * clamp(u / 0.35, 0, 1) end
+    if ph == 0 || self.mpg == nil
+      self.rows(oy, t, self.rs, self.ss, self.nev, 0xFFC860, 0x7DA8F0, self.mtw, ph == 0 ? f : 1.0)
+      return
+    end
+    var c = self.mc5f
+    for i : 0 .. 4 c[i] = self.col(self.mc5[i], f) end
+    var nr = self.nar
+    self.nar = false
+    self.glyphs(self.mpg, 17 + (35 - self.mpw) / 2, c, oy, 9.0, 0, -99)
+    self.nar = nr
+    # Lunar cycle: new moon (left) - full moon (middle) - new moon (right), today's dot pulses
+    var lc = self.col(0x303038, f)
+    for x : 17 .. 51 pixel(x, 13 + oy, lc) end
+    var ec = self.col(0x505060, f)
+    pixel(17, 12 + oy, ec) pixel(17, 14 + oy, ec) pixel(51, 12 + oy, ec) pixel(51, 14 + oy, ec)
+    rect_fill(33, 12 + oy, 3, 3, self.col(0x908870, f))
+    var mx = 17 + int(self.mf * 34 + 0.5)
+    var dc = self.col(0x8A8270, f)
+    for x : 17 .. mx pixel(x, 13 + oy, dc) end
+    rect_fill(mx - 1, 12 + oy, 3, 3, self.col(0xFFF4D0, f * (0.6 + 0.4 * math.sin(t * 4))))
+  end
+
+  def page(k, oy, t)
+    if oy <= -16 || oy >= 16 return end
+    if k == 0 self.wview(oy, t)
+    elif k == 1 self.rview(oy, t)
+    elif k == 3 self.sview(oy, t)
+    elif k == 4 self.fview(oy, t)
+    elif k == 5 self.windv(oy, t)
+    else self.mview(oy, t) end
+  end
+
+  def draw()
+    clear()
+    font("small")
+    var now = now_ms()
+    # A page change slides up (forward) or down (back); the old page leaves on the other side
+    var e = self.ez((now - self.ts) / 500.0)
+    var cur = self.pages[self.pi]
+    if self.pp >= 0 && e < 1
+      var dn = self.pi > self.pp ? 1 : -1
+      var off = int((1 - e) * 16 + 0.5) * dn
+      self.page(self.pages[self.pp], off - 16 * dn, (now - self.tp) / 1000.0)
+      self.page(cur, off, (now - self.ps) / 1000.0)
+    else
+      self.page(cur, 0, (now - self.ps) / 1000.0)
+    end
+    # Page dots in the gap column, one per page, the current one lit
+    var np = size(self.pages)
+    if np > 1
+      for i : 0 .. np - 1 pixel(16, 8 - np + i * 2, i == self.pi ? 0xB4B4C0 : 0x2A2A34) end
+    end
+  end
+
+  def on_button(btn)
+    if btn == "select" self.ticks = 0 end   # refresh, the press still passes on
+  end
+end
+
+return BeautifulWeather()
