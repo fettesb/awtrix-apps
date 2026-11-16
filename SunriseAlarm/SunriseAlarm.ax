@@ -1,0 +1,682 @@
+# @name    Sunrise Alarm
+# @desc    Inspired by Blueforcer's Super Alarm Clock (https://awtrix.de/script/ybNQ4zV5qxfS), made for grown-ups: a wake-up light with a sunrise before the alarm, only the time in red at night, gently rising bells, snooze and a good-morning greeting (52x16, Ulanzi TC002)
+# @author  Hank_the_Tank / Claude
+# @version 1.6
+# @needs   audio.song
+# @display 52x16
+# @config  enabled bool   "Alarm on"                   default=false group="Alarm times" help="Master switch for both alarms."
+# @config  time1   text   "Alarm time 1 (HH:MM)"       default="06:30" maxlen=5 group="Alarm times"
+# @config  days1   select "Days for alarm 1"           default=Mon-Fri options=Mon-Fri,Sat-Sun,Daily,Off group="Alarm times"
+# @config  time2   text   "Alarm time 2 (HH:MM)"       default="08:30" maxlen=5 group="Alarm times"
+# @config  days2   select "Days for alarm 2"           default=Off options=Mon-Fri,Sat-Sun,Daily,Off group="Alarm times"
+# @config  night   bool   "Red night display"          default=true group="Night" help="From the start time on, the clock shows only the time in red - until the sunrise before the alarm."
+# @config  nfrom   text   "Night display from (HH:MM)" default="22:00" maxlen=5 group="Night"
+# @config  nalways bool   "Also without an alarm"      default=false group="Night" help="Night display every night, even when no alarm is set for the morning."
+# @config  nuntil  text   "Night display until (HH:MM)" default="06:30" maxlen=5 group="Night" help="End on nights without an alarm. With an alarm it ends with the sunrise before it."
+# @config  ncol    color  "Night display colour"       default=#E00000 group="Night"
+# @config  nbright slider "Brightness at night"        default=4 min=0 max=100 unit=% group="Night" help="0 = leave the clock's brightness alone."
+# @config  nhide   bool   "Hide the clock at night"    default=false group="Night" help="The panel stays dark at night. Press a button to show the time for a few seconds."
+# @config  nshow   number "Show the time for"          default=10 min=1 max=120 unit=s group="Night" help="How long the time stays visible after a button press."
+# @config  dawn    number "Sunrise before the alarm"   default=15 min=0 max=60 unit=min group="Sunrise" help="How long before the alarm it slowly gets light. 0 = off."
+# @config  sbright slider "Brightness at the end"      default=80 min=0 max=100 unit=% group="Sunrise" help="The panel dims up to this brightness. 0 = no dimming."
+# @config  birds   bool   "Birdsong"                   default=true group="Sunrise" help="Soft chirping in the last third of the sunrise."
+# @config  nsun    bool   "Sunrise without an alarm"   default=true group="Sunrise" help="Silent sunrise at the end of the night display on nights without an alarm (needs 'Also without an alarm')."
+# @config  tone    select "Alarm sound"                default=Bells options=Bells,Classic group="Alarm sound"
+# @config  volume  slider "Volume"                     default=60 min=5 max=100 unit=% group="Alarm sound"
+# @config  gentle  bool   "Get louder gently"          default=true group="Alarm sound" help="Starts quietly and gets louder every 45 s."
+# @config  snooze  number "Snooze time"                default=9 min=1 max=30 unit=min group="Snooze" help="Middle or left button (or pressing the knob) snoozes."
+# @config  slimit  number "Snoozes allowed"            default=3 min=0 max=10 group="Snooze" help="After that, the snooze button ends the alarm."
+# @config  timeout number "Stop ringing after"         default=15 min=1 max=60 unit=min group="Snooze"
+# @config  show    bool   "Show in app rotation"       default=true group="Display" help="Shows the next alarm during the day. Off: appears only at night and for the alarm."
+
+import math
+
+class SunriseAlarm
+  var enabled, times, days, nightmode, nfrom, nalways, nuntil, nsun, free, fskip, ncol, nbright, nhide, nshow, vis, dawn, sbright, birds
+  var vol, gentle, snz, slimit, tout, showme, audio
+  var songs, chime, zzz, chirp, vf                   # sounds, built once
+  var bm, bell, wdn, ht, tt, sc, rc                  # digits, bell, gradients
+  var state, shown, t0, da, demo, stage, cnt, wake, back, kl, blev, pw, tick
+  var marks, lastmin, ahead, nslot, nh, nm, nw, lab, lx
+
+  def init()
+    self.enabled = store.get("enabled")
+    self.times = [self.hm(store.get("time1")), self.hm(store.get("time2"))]
+    self.days = [store.get("days1"), store.get("days2")]
+    self.nightmode = store.get("night")
+    self.nfrom = self.hm(store.get("nfrom"))
+    self.nalways = store.get("nalways")
+    self.nuntil = self.hm(store.get("nuntil"))
+    self.nsun = store.get("nsun")
+    self.free = false
+    self.fskip = false
+    self.ncol = store.get("ncol")
+    self.nbright = store.get("nbright")
+    self.nhide = store.get("nhide")
+    self.nshow = store.get("nshow") * 1000
+    self.vis = 0
+    self.dawn = store.get("dawn") * 60
+    self.sbright = store.get("sbright")
+    self.birds = store.get("birds")
+    self.vol = store.get("volume")
+    self.gentle = store.get("gentle")
+    self.snz = store.get("snooze") * 60000
+    self.slimit = store.get("slimit")
+    self.tout = store.get("timeout") * 60000
+    self.showme = store.get("show")
+    self.audio = sound.can("song")
+
+    # Alarm sounds (without the volume line, which is added per stage)
+    if store.get("tone") == "Classic"
+      self.songs = "bpm 120\nloop 1\n"
+                   "inst beep wave=pulse duty=50 attack=1 decay=60 sustain=80 release=20 volume=70 note=a6\n"
+                   "beep: %x.x.x.x......... | %x.x.x.x......... |"
+    else
+      self.songs = "bpm 84\nloop 1\necho time=3 feedback=40 damp=2500\n"
+                   "inst bell wave=sine attack=2 decay=1600 sustain=0 release=900 volume=130 echo=45\n"
+                   "inst glk wave=tri attack=1 decay=500 sustain=0 release=300 volume=55 echo=35\n"
+                   "inst pad wave=saw unison=14 attack=900 sustain=55 release=1200 cutoff=1100 volume=30\n"
+                   "bell: e5:4 g5 a5 c6 | d6:4 c6 a5 g5 | e5:4 g5 a5 g5 | e5:8 d5:8 |\n"
+                   "pad: [c4 e4 g4]:16 | [a3 c4 e4]:16 | [f3 a3 c4]:16 | [g3 b3 d4]:16 |\n"
+                   "glk: (r:2 g6:2 r:4 e6:2 r:6)4"
+    end
+    self.vf = [0.3, 0.6, 1.0]                        # volume stages when getting louder gently
+    var v = "volume " + str(self.vol * 2) + "\n"
+    self.chime = v + "bpm 132\nloop off\necho time=2 feedback=35 damp=3000\n"
+                 "inst b wave=sine attack=1 decay=1400 sustain=0 release=700 volume=120 echo=40\n"
+                 "inst s wave=tri attack=1 decay=400 sustain=0 release=200 volume=60 echo=30\n"
+                 "b: c5:2 e5 g5 c6 e6:4 g6:4 | [c6 e6 g6 c7]:16 |\n"
+                 "s: r:8 g6:1 c7:1 e7:1 g7:1 r:4 | r:16 |"
+    self.zzz = v + "inst z wave=sine glide=300 attack=2 decay=500 sustain=0 release=200 volume=110\nz: g5:2 ^c5:6"
+    v = "volume " + str(self.vol) + "\nbpm 120\necho time=1 feedback=25 damp=5000\n"
+        "inst bd wave=sine glide=25 attack=1 decay=70 sustain=0 release=40 volume=55 echo=30\n"
+    self.chirp = [v + "bd: c7:1 ^g7:1 r:1 e7:1 ^c8:1 r:2 g7:1 ^d8:1",
+                  v + "bd: a7:1 ^e8:1 r:2 a7:1 ^e8:1 r:1 a7:1 ^f8:1"]
+
+    # Block digits 3x5, drawn at 2x = 6x10 (the 1 is drawn separately, slim)
+    self.bm = [0x7B6F, 0, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF]
+    # Bell 12x11, bit 11 = left column; last row = clapper
+    self.bell = [0x060, 0x0F0, 0x1F8, 0x3FC, 0x3FC, 0x3FC, 0x7FE, 0x7FE, 0xFFF, 0xFFF, 0x060]
+    self.wdn = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
+    # Sunrise: colour at the horizon, colour at the top, colour of the sun (0 = night, 1 = day)
+    self.ht = [0x180000, 0x901000, 0xFF5000, 0xFFA040, 0xFFE0A0]
+    self.tt = [0x000000, 0x0A0008, 0x301028, 0xC06040, 0xFFD8A0]
+    self.sc = [0xA00800, 0xFF4000, 0xFFA030, 0xFFE890]
+    self.rc = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    self.marks = store.get("marks")
+    if !isinstance(self.marks, list) || size(self.marks) != 2 self.marks = [0, 0] end
+    self.state = 0                                   # 0 day, 1 night, 2 sunrise, 3 ringing, 4 snoozing, 5 good morning
+    self.shown = false
+    self.t0 = 0
+    self.da = 1
+    self.demo = false
+    self.stage = 0
+    self.cnt = 0
+    self.wake = 0
+    self.back = 0
+    self.kl = false
+    self.blev = -1
+    self.pw = false
+    self.tick = 0
+    self.lastmin = -1
+    self.ahead = -1
+    self.nslot = -1
+    self.nh = 0
+    self.nm = 0
+    self.lab = ""
+    self.lx = 18
+    self.nw = 31
+  end
+
+  def setup()
+    self.light(-1)                                   # restore the brightness after a restart in the middle of an alarm
+  end
+
+  # "HH:MM" -> minute of the day, -1 if invalid
+  def hm(v)
+    if type(v) != "string" return -1 end
+    var m = re.match("^(\\d\\d?):(\\d\\d)$", v)
+    if m == nil return -1 end
+    var h = int(m[1])
+    var n = int(m[2])
+    return h < 24 && n < 60 ? h * 60 + n : -1
+  end
+
+  def today()
+    return year() * 10000 + month() * 100 + day()
+  end
+
+  def allowed(s, w)
+    var d = self.days[s]
+    return d == "Daily" || (d == "Mon-Fri" && w >= 1 && w <= 5) || (d == "Sat-Sun" && (w == 0 || w == 6))
+  end
+
+  # Next alarm: minutes until then, its time and the text for the day view - once a minute
+  def plan(cur, wd)
+    self.ahead = -1
+    self.nslot = -1
+    if !self.enabled return end
+    var date = self.today()
+    var best = 99999
+    for d : 0 .. 7
+      for s : 0 .. 1
+        var t = self.times[s]
+        if t >= 0 && self.allowed(s, (wd + d) % 7)
+          var dl = d * 1440 + t - cur
+          if dl >= 0 && dl < best && !(d == 0 && self.marks[s] == date)
+            best = dl
+            self.nslot = s
+          end
+        end
+      end
+    end
+    if self.nslot < 0 return end
+    self.ahead = best
+    var t = self.times[self.nslot]
+    self.nh = t / 60
+    self.nm = t % 60
+    if best < 1440
+      self.lab = "IN " + str(best / 60) + ":" + (best % 60 < 10 ? "0" : "") + str(best % 60) + " H"
+    else
+      self.lab = "ON " + self.wdn[(wd + (cur + best) / 1440) % 7]
+    end
+    self.lx = 17 + (35 - text_ink_width(self.lab)) / 2
+    self.nw = 2                                      # width of the alarm time in block digits
+    for d : [self.nh / 10, self.nh % 10, self.nm / 10, self.nm % 10] self.nw += d == 1 ? 5 : 7 end
+  end
+
+  def mark(s)
+    var d = self.today()
+    self.marks[s] = d
+    if self.times[1 - s] == self.times[s] self.marks[1 - s] = d end
+    store.set("marks", self.marks.copy())
+    self.lastmin = -1
+  end
+
+  # Set the clock brightness in %; p < 0 restores the previous setting
+  def light(p)
+    var keep = store.get("bright_restore")
+    if p < 0
+      if isinstance(keep, list) && size(keep) == 2
+        if type(keep[0]) == "int" settings.set("brightness", keep[0]) end
+        if keep[1] == true settings.set("autoBrightness", true) end
+      end
+      store.set("bright_restore", nil)
+      self.blev = -1
+      return
+    end
+    if keep == nil
+      keep = [settings.get("brightness"), settings.get("autoBrightness")]
+      if type(keep[0]) != "int" return end
+      store.set("bright_restore", keep)
+      if keep[1] == true settings.set("autoBrightness", false) end
+    end
+    var v = clamp(int(p * 255 / 100), 1, 255)
+    if v != self.blev
+      settings.set("brightness", v)
+      self.blev = v
+    end
+  end
+
+  def take(power)
+    if power && !self.pw && !display.is_on()
+      self.pw = true
+      display.power(true)
+    end
+    rotation.show()
+    rotation.pause()
+  end
+
+  def leave()
+    self.state = 0
+    self.demo = false
+    self.free = false
+    self.quiet()
+    self.light(-1)
+    rotation.resume()
+    if self.shown rotation.next() end              # the clock asks duration() only on arrival (night = 1 h):
+                                                   # move on ourselves, or the app stays that long
+    if self.pw
+      display.power(false)                           # was off before: off again
+      self.pw = false
+    end
+    self.lastmin = -1
+  end
+
+  def quiet()
+    if self.audio try sound.stop() except .. end end
+  end
+
+  def music()
+    if !self.audio return end
+    try
+      var s = "volume " + str(int(self.vol * 2 * self.vf[self.stage])) + "\n" + self.songs
+      sound.play({'song': s, 'loop': true, 'nextBar': self.stage > 0})
+    except .. as e, m
+      log("SunriseAlarm: " + str(e) + " " + str(m))
+    end
+  end
+
+  def fx(s)
+    if self.audio try sound.effect({'song': s}) except .. as e, m log("SunriseAlarm: " + str(m)) end end
+  end
+
+  def ring(fresh)
+    self.quiet()
+    if fresh
+      self.cnt = 0
+      if !self.demo && self.nslot >= 0 self.mark(self.nslot) end
+    end
+    self.state = 3
+    self.t0 = now_ms()
+    self.stage = self.gentle && fresh ? 0 : (self.gentle ? 1 : 2)
+    self.take(true)
+    if self.sbright > 0 self.light(self.sbright) end
+    self.music()
+  end
+
+  def nap()
+    if self.cnt >= self.slimit
+      self.stop()
+      return
+    end
+    self.quiet()
+    self.cnt += 1
+    self.state = 4
+    self.t0 = now_ms()
+    self.wake = self.t0 + self.snz
+    self.fx(self.zzz)
+  end
+
+  # Up and awake: good-morning greeting, then back to the rotation
+  def stop()
+    if self.free
+      self.fskip = true
+    elif !self.demo && self.state == 2 && self.nslot >= 0
+      self.mark(self.nslot)
+    end
+    self.quiet()
+    self.state = 5
+    self.t0 = now_ms()
+    if self.audio && !self.free try sound.play({'song': self.chime}) except .. end end
+  end
+
+  # End the night display early (middle button / knob): for the rest of this night;
+  # an alarm that is still set comes anyway, then without the greeting
+  def awake()
+    self.fskip = true
+    if self.ahead > 0 && self.ahead < 1440
+      self.leave()
+    else
+      self.free = true                               # silent, no chime
+      self.stop()
+    end
+  end
+
+  def loop()
+    var h = hour()
+    var m = minute()
+    if h < 0 return end
+    var ms = now_ms()
+    var cur = h * 60 + m
+    self.tick += 1
+    if cur != self.lastmin
+      self.lastmin = cur
+      self.plan(cur, weekday())
+    end
+    var st = self.state
+
+    if st == 2
+      var a = clamp((ms - self.t0) * 1.0 / self.da, 0.0, 1.0)
+      if self.sbright > 0                           # dim the light up in 5 % steps
+        var lo = self.nbright > 0 ? self.nbright : 3
+        self.light(max(lo, int((lo + (self.sbright - lo) * a) / 5) * 5))
+      end
+      if self.birds && !self.free && a > 0.66 && self.tick % 7 == 0 self.fx(self.chirp[(self.tick / 7) % 2]) end
+      if self.demo && a >= 1.0 self.ring(true) end
+    elif st == 3
+      if ms - self.t0 > self.tout
+        self.leave()
+        return
+      end
+      if self.gentle && self.stage < 2 && ms - self.t0 > (self.stage + 1) * 45000
+        self.stage += 1
+        self.music()
+      end
+    elif st == 4
+      if ms >= self.wake self.ring(false) end
+    elif st == 5
+      if ms - self.t0 > 7000 self.leave() end
+    end
+    st = self.state
+    if st >= 1 && st <= 4 && !self.shown && ms >= self.back self.take(st >= 2) end
+    if self.demo || st >= 3 return end
+
+    # Alarm set? Then night display, sunrise, ringing
+    if self.ahead == 0
+      self.ring(true)
+      return
+    end
+    var left = self.ahead * 60 - second()
+    if self.ahead > 0 && st <= 1 && self.dawn > 0 && left <= self.dawn
+      self.state = 2
+      self.free = false
+      self.da = self.dawn * 1000
+      self.t0 = ms - (self.dawn - left) * 1000
+      self.take(true)
+      return
+    end
+    # night display without an alarm: seconds until it ends, -1 outside
+    var fl = -1
+    var u = self.nuntil
+    var f = self.nfrom
+    if self.nightmode && self.nalways && f >= 0 && u >= 0 && f != u &&
+       (f < u ? cur >= f && cur < u : cur >= f || cur < u)
+      fl = ((u - cur + 1440) % 1440) * 60 - second()
+    end
+    var span = f < 0 || self.ahead < 0 ? -1 : (self.nh * 60 + self.nm - f + 1440) % 1440
+    var an = self.nightmode && self.ahead > 0 && self.ahead < 1440 && self.ahead <= span
+    if fl < 0 && !an self.fskip = false end
+    if st == 2
+      if self.free && fl < 0
+        self.state = 5                               # end of the night display: silent good-morning greeting
+        self.t0 = ms
+      end
+      return
+    end
+    if !an && fl > 0 && !self.fskip && self.nsun && self.dawn > 0 && fl <= self.dawn
+      self.state = 2                                 # silent sunrise at the end of the night display
+      self.free = true
+      self.da = self.dawn * 1000
+      self.t0 = ms - (self.dawn - fl) * 1000
+      self.take(true)
+    elif (an || fl > 0) && !self.fskip && st == 0
+      self.state = 1
+      self.vis = ms + self.nshow                     # show it briefly first, then dark (if hidden)
+      if self.nbright > 0 self.light(self.nbright) end
+      if ms >= self.back self.take(false) end
+    elif (self.fskip || (!an && fl < 0)) && st == 1
+      self.leave()
+    end
+  end
+
+  def on_show()
+    self.shown = true
+    if self.state == 0 self.t0 = now_ms() else rotation.pause() end
+  end
+
+  def on_hide()
+    self.shown = false
+    self.kl = false
+    if self.state == 5
+      self.leave()
+    elif self.state != 0
+      self.back = now_ms() + (self.state == 1 ? 120000 : 30000)   # switched away: come back later
+      rotation.resume()
+    end
+  end
+
+  def should_show()
+    return self.showme || self.state != 0
+  end
+
+  def duration()
+    return self.state == 0 ? 0 : 3600000
+  end
+
+  def on_button_event(btn, ev)
+    if ev != "press" return false end
+    var st = self.state
+    if st == 0
+      if btn != "select" return false end
+      self.demo = true                               # preview: 20 s sunrise, then ringing
+      self.state = 2
+      self.t0 = now_ms()
+      self.da = 20000
+      self.take(true)
+    elif st == 1
+      if self.nhide && now_ms() >= self.vis
+        self.vis = now_ms() + self.nshow             # dark: the first press only shows the time
+      elif btn == "select"
+        self.awake()
+      elif btn == "right"
+        rotation.next()                              # look at other apps, back after 2 min
+      else
+        rotation.previous()
+      end
+    elif st == 2
+      if btn == "right" self.stop() end              # already awake: alarm off for today
+    elif st == 3
+      if btn == "right" self.stop() else self.nap() end
+    elif st == 4
+      if btn == "right" self.stop() elif btn == "select" self.ring(false) end
+    else
+      self.leave()
+    end
+    return true
+  end
+
+  # Knob: press = snooze, long press = off
+  def on_knob(ev)
+    if self.state == 1 && ev == "press"
+      if self.nhide && now_ms() >= self.vis self.vis = now_ms() + self.nshow else self.awake() end
+      return true
+    end
+    if self.state < 2 || self.state > 4 return false end
+    if ev == "long"
+      self.kl = true
+      self.stop()
+    elif ev == "release"
+      if !self.kl && self.state == 3 self.nap() end
+      self.kl = false
+    end
+    return ev != "left" && ev != "right"
+  end
+
+  # ---------- Drawing ----------
+
+  def col(c, f)
+    if f <= 0 return 0 end
+    if f >= 1 return c end
+    return (int(((c >> 16) & 255) * f) << 16) | (int(((c >> 8) & 255) * f) << 8) | int((c & 255) * f)
+  end
+
+  def mix(a, b, f)
+    if f <= 0 return a end
+    if f >= 1 return b end
+    return (int(((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * f) << 16) |
+           (int(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * f) << 8) |
+           int((a & 255) + ((b & 255) - (a & 255)) * f)
+  end
+
+  def ramp(l, a)
+    var n = size(l) - 1
+    var f = clamp(a, 0.0, 1.0) * n
+    var i = int(f)
+    if i >= n return l[n] end
+    return self.mix(l[i], l[i + 1], f - i)
+  end
+
+  # Time a:b in 6x10 block digits from row y; x < 0 = centred, lz = drop the leading zero
+  def clock(a, b, x, y, c, lz)
+    var z = lz && a < 10
+    var tw = 2                                       # colon 2 + gap 1, minus the last gap
+    for j : 0 .. 3
+      var d = j == 0 ? a / 10 : (j == 1 ? a % 10 : (j == 2 ? b / 10 : b % 10))
+      if !(j == 0 && z) tw += d == 1 ? 5 : 7 end
+    end
+    if x < 0 x = (width() - tw) / 2 end
+    for j : 0 .. 4
+      var d = j == 0 ? a / 10 : (j == 1 ? a % 10 : (j == 3 ? b / 10 : b % 10))
+      if j == 2                                      # colon, steady, no blinking
+        rect_fill(x, y + 2, 2, 2, c)
+        rect_fill(x, y + 6, 2, 2, c)
+        x += 3
+      elif j == 0 && z
+        continue
+      elif d == 1                                    # slim 1: short flag, 2 px stem, no foot
+        rect_fill(x, y + 2, 2, 2, c)
+        rect_fill(x + 2, y, 2, 10, c)
+        x += 5
+      else
+        var m = self.bm[d]
+        for r : 0 .. 4
+          for k : 0 .. 2
+            if (m >> (14 - r * 3 - k)) & 1 rect_fill(x + k * 2, y + r * 2, 2, 2, c) end
+          end
+        end
+        x += 7
+      end
+    end
+  end
+
+  # Sky for progress a (0 night .. 1 day), remembers the row colours
+  def sky(a)
+    var tc = self.ramp(self.tt, a)
+    var hc = self.ramp(self.ht, a)
+    for r : 0 .. 15
+      var f = r / 15.0
+      var c = self.mix(tc, hc, f * f)
+      self.rc[r] = c
+      rect_fill(0, r, width(), 1, c)
+    end
+  end
+
+  # Sun with a soft glow over the sky
+  def sun(cx, cy, rs, R, sc)
+    var y0 = max(0, int(cy - R))
+    var y1 = min(15, int(cy + R) + 1)
+    if y0 > y1 return end
+    for y : y0 .. y1
+      for x : int(cx - R) .. int(cx + R) + 1
+        var dx = x + 0.5 - cx
+        var dy = y + 0.5 - cy
+        var d = math.sqrt(dx * dx + dy * dy)
+        if d < rs
+          pixel(x, y, self.mix(sc, 0xFFFFF0, 0.5 - d / rs * 0.5))
+        elif d < R
+          var f = 1.0 - (d - rs) / (R - rs)
+          pixel(x, y, self.mix(self.rc[y], sc, f * f * 0.85))
+        end
+      end
+    end
+  end
+
+  def draw()
+    var ms = now_ms()
+    var st = self.state
+
+    if st == 1                                       # night: only the time in red (hidden: dark until a button is pressed)
+      clear()
+      var v = self.vis - ms
+      if !self.nhide || v > 0                       # fade out over the last 0.6 s
+        self.clock(hour(), minute(), -1, 3, self.nhide && v < 600 ? self.col(self.ncol, v / 600.0) : self.ncol, false)
+      end
+      return
+    end
+
+    if st == 2                                       # sunrise
+      var a = clamp((ms - self.t0) * 1.0 / self.da, 0.0, 1.0)
+      self.sky(a)
+      var e = a * a * (3 - 2 * a)
+      self.sun(26, 22 - 15 * e, 4.2, 6 + 7 * a, self.ramp(self.sc, a))
+      if a > 0.5                                     # two birds fly past
+        var bc = self.col(0x2A0E04, (a - 0.5) * 4)
+        for i : 0 .. 1
+          var bx = (ms / (110 + i * 40) + i * 31) % 72 - 10
+          var by = 2 + i * 3 + int(math.sin(ms * 0.003 + i) + 0.5)
+          if (ms / 160 + i) % 2
+            pixel(bx, by, bc) pixel(bx + 1, by + 1, bc) pixel(bx + 2, by, bc)
+          else
+            pixel(bx, by + 1, bc) pixel(bx + 1, by + 1, bc) pixel(bx + 2, by + 1, bc)
+          end
+        end
+      end
+      self.clock(hour(), minute(), -1, 3, self.mix(self.ncol, 0x1C0800, clamp((a - 0.2) * 2.5, 0.0, 1.0)), false)
+      return
+    end
+
+    if st == 3                                       # ringing: the sun pulses to the beat
+      self.sky(0.85)
+      var b = sound.beat()
+      var k = b == nil ? 0.5 + 0.5 * math.sin(ms * 0.006) : math.exp(-(b % 1.0) * 4.0)
+      var rs = 4.5 + 1.2 * k
+      self.sun(26, 8, rs, rs + 7, 0xFFF0B0)
+      for i : 0 .. 7
+        var an = ms * 0.0012 + i * 0.7854
+        var ca = math.cos(an)
+        var sa = math.sin(an)
+        for j : 0 .. 2
+          var r = rs + 2.5 + j * 1.7 + k
+          pixel(int(26.5 + ca * r), int(8.5 + sa * r * 0.8), self.mix(self.rc[clamp(int(8 + sa * r * 0.8), 0, 15)], 0xFFFFFF, 0.7 - j * 0.2))
+        end
+      end
+      self.clock(hour(), minute(), -1, 3, self.mix(0x301000, 0x000000, k), false)
+      return
+    end
+
+    if st == 4                                       # snoozing: time left, gently breathing
+      clear()
+      var r = max(0, (self.wake - ms + 999) / 1000)
+      self.clock(r / 60, r % 60, -1, 3, self.col(0xFF7A00, 0.45 + 0.2 * math.sin(ms * 0.0015)), true)
+      return
+    end
+
+    if st == 5                                       # good morning
+      var t = (ms - self.t0) / 1000.0
+      self.sky(0.45)
+      var g = clamp(t * 2.5, 0.0, 1.0)
+      var rs = 3.6 * g * (2 - g)
+      self.sun(8, 8, rs, rs + 5, 0xFFE070)
+      for i : 0 .. 7
+        var an = t * 1.2 + i * 0.7854
+        var r = rs + 2 + 0.8 * math.sin(t * 6 + i)
+        pixel(int(8.5 + math.cos(an) * r), int(8.5 + math.sin(an) * r), self.col(0xFFE8A0, g))
+      end
+      text(19, 7, "Good", self.col(0xFFF0C0, (t - 0.3) * 3))
+      text(19, 15, "morning!", self.col(0xFFB040, (t - 0.6) * 3))
+      return
+    end
+
+    # Day view: bell on the left, next alarm on the right
+    clear()
+    var t = (ms - self.t0) / 1000.0
+    var on = self.ahead >= 0
+    var sw = t < 1.8 && on ? math.sin(t * 13) * (1.8 - t) * 0.6 : 0.0
+    var sh = ((ms - self.t0) % 4000) * 0.009 - 6    # shine sweep every 4 s
+    for r : 0 .. 10
+      var m = self.bell[r]
+      var o = int(sw * r * 0.25 + (sw >= 0 ? 0.5 : -0.5))
+      if r == 10 o -= sw > 0.15 ? 1 : (sw < -0.15 ? -1 : 0) end
+      var c = r == 10 ? 0xB07830 : (r >= 8 ? (r == 8 ? 0xFFC040 : 0xA86400) : self.mix(0xFFEC9A, 0xD89010, r / 7.0))
+      if !on c = self.mix(c, 0x505050, 0.85) end
+      for k : 0 .. 11
+        if (m >> (11 - k)) & 1
+          var x = 2 + k + o
+          var y = 3 + r
+          var cc = c
+          var d = x + y - sh
+          if on && d > -1.5 && d < 1.5 cc = self.mix(c, 0xFFFFFF, 0.6 - (d < 0 ? -d : d) * 0.35) end
+          pixel(x, y, cc)
+        end
+      end
+    end
+    if sw > 0.2 || sw < -0.2                         # sound arcs while swinging
+      var rc = self.col(0xFFE070, (sw < 0 ? -sw : sw) * 1.4)
+      pixel(0, 5, rc) pixel(0, 7, rc) pixel(1, 6, rc)
+      pixel(15, 5, rc) pixel(15, 7, rc) pixel(14, 6, rc)
+    end
+    if !on
+      line(1, 14, 14, 1, 0xB01010)                   # crossed out
+      text(19 + (33 - text_ink_width("Alarm")) / 2, 7, "Alarm", 0x707070)
+      text(19 + (33 - text_ink_width("off")) / 2, 15, "off", 0x707070)
+      return
+    end
+    var f = clamp(t * 2.5, 0.0, 1.0)
+    self.clock(self.nh, self.nm, 17 + (35 - self.nw) / 2, 0, self.col(0xFFD27A, f), false)
+    text(self.lx, 16, self.lab, self.col(0x9A8A70, clamp(t * 2.5 - 0.6, 0.0, 1.0)))
+  end
+end
+
+return SunriseAlarm()
