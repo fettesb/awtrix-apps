@@ -1,0 +1,1578 @@
+# @name    LiveScore
+# @desc    Live football score of your favourite team (ESPN) with both team kits, goal fireworks, jingle and referee whistles - only in the rotation while the match is on (52x16, Ulanzi TC002)
+# @author  Hank_the_Tank / Claude
+# @version 2.7
+# @display 52x16
+# @config  team     text   "ESPN team ID"              default="132" maxlen=8 group="My Team" help="The number in espn.com/soccer/club/_/id/<ID>/... - 132 = Bayern Munich"
+# @config  kcol     color  "Kit colour (my team)"      default=#DC052D group="My Team"
+# @config  ktrim    color  "Kit trim (my team)"        default=#FFFFFF group="My Team"
+# @config  kpat     select "Kit pattern (my team)"     default=plain group="My Team" options=plain,stripes,hoops,checker,sash,halves,quarters,band,center,sleeves,chevron,fade
+# @config  ecol     bool   "ESPN colours for my team"  default=true group="My Team" help="On: kit colours from ESPN. Off: the two colours above"
+# @config  team2    text   "Second team (ESPN ID)"     maxlen=8 group="Team 2" hint=481 help="Optional, e.g. your club and your national team. Empty = one team only"
+# @config  kcol2    color  "Kit colour (team 2)"       default=#FFFFFF group="Team 2"
+# @config  ktrim2   color  "Kit trim (team 2)"         default=#000000 group="Team 2"
+# @config  kpat2    select "Kit pattern (team 2)"      default=plain group="Team 2" options=plain,stripes,hoops,checker,sash,halves,quarters,band,center,sleeves,chevron,fade
+# @config  ecol2    bool   "ESPN colours for team 2"   default=true group="Team 2" help="On: kit colours from ESPN. Off: the two colours above"
+# @config  every    number "Update during the match" default=30 min=15 max=300 unit=s group="Settings"
+# @config  post     number "Show final score"         default=15 min=0 max=120 unit=min group="Settings"
+# @config  pre      number "Preview before kick-off"  default=60 min=0 max=240 unit=min group="Settings" help="This long before the match: both kits with kick-off time and countdown. 0 = from kick-off"
+# @config  extra    bool   "Stats, table, next match" default=true group="Settings" help="Half-time: possession and shots. After full time also league position and next match"
+# @config  tab0     bool   "League position between matches" default=false group="Settings" help="Without a match the app shows the position and points of your (first) team. Off: only around matches"
+# @config  tabpic   select "Show with the league position" default=kit group="Settings" options=kit,crest help="Your kit or the club crest from ESPN"
+# @config  friendly bool   "Include friendlies"        default=false group="Settings" help="ESPN often does not update friendlies live"
+# @config  jump     bool   "Jump in at kick-off, goals and full time" default=true group="Settings"
+# @config  browse   select "Browse goals and cards"    default=knob group="Settings" options=off,knob,buttons,both help="Shows every goal and card of the match again while the app is on screen"
+# @config  say      select "Sound"                     default=all group="Settings" options=off,effects,mine,all help="effects = whistles + goal jingle; mine/all = plus a spoken goal call for my team / all goals"
+# @config  lang     select "Language"                  default=English group="Settings" options=Deutsch,English help="Texts on the display and announcements. German announcements need a German voice pack"
+# @config  sgoal    text   "Custom goal call"          maxlen=64 group="Settings" hint="Doelpunt! {team}!" help="{team} = the team that scored; without {team} the name goes at the end. Empty = default"
+# @config  snogoal  text   "Custom no-goal call"       maxlen=64 group="Settings" hint="Geen doelpunt!" help="When VAR rules out a goal. Empty = default of the chosen language"
+# @config  q1       number "Quiet from"                default=0 min=0 max=23 unit=h group="Settings" help="No sound during quiet hours. Same hour in both = no quiet hours"
+# @config  q2       number "Quiet until"               default=0 min=0 max=23 unit=h group="Settings"
+# @config  scol     color  "Score"                    default=#FFFFFF group="Settings"
+# @config  bcol     color  "Match time bar"           default=#00E000 group="Settings"
+# @config  bg       select "Background"                default=grass group="Settings" options=black,navy,anthracite,grass,bordeaux,petrol help="Subtle gradient behind kits and score, so dark kit colours do not vanish into black"
+# @config  topic    text   "MQTT topic"                maxlen=64 group="Settings" hint=awtrix/livescore help="Optional: kick-off, goals, cards, VAR and full time as JSON, e.g. for Home Assistant"
+import string
+import math
+import json
+
+class LiveScore
+  var tid, every, post, fr, jump, scol, bcol, mine, ecol   # settings (team of the current match)
+  var tids, mines, ecols, ti, pre, extra, brw, q1, q2, topic, lb, say2, sg, uml, nmap
+  var sh, bm                                    # kit outline per row, 3x5 block digits
+  var ev, slug, kick, skip, sk, cand, sf, hd    # next match: id, league, kick-off (epoch s), last finished
+  var st, hs, aws, cl, per, ht, tp, fin, hid    # live state
+  var kh, ka, hg, ag, hx, cx, ax, nar, fill, bc, flash, tf
+  var show, busy, ticks, ol, os, say, mh, nh, na
+  var bgg, gk, vis, nk, cq, pz, evl, bi, reds   # background, cards, events
+  var gq, gg, gmin, gnm, gs, gt, gw, gl, tn, sx, sb   # goal scorer banner
+  var t0, gm, kc, tl, rnd, pend, wh, sj, ss, sv, fan, wd # animation and sound
+  var so, sot, stx, rk0, tbx, rq, nx, lose, res, cf, vf, vt, ptx, pg, tz   # 2.6: shootout, stats, table, VAR, preview
+  var de, tab0, tb0, kid, tq, crest, curl      # league position between matches
+
+  def init()
+    # up to two teams, each with its own kit settings
+    self.tids = []
+    self.mines = []
+    self.ecols = []
+    for k : ["", "2"]
+      var m = re.search("\\d+", str(store.get("team" + k)))
+      if m != nil && self.tids.find(m[0]) == nil
+        self.tids.push(m[0])
+        self.mines.push([store.get("kcol" + k), store.get("ktrim" + k), store.get("kpat" + k)])
+        self.ecols.push(store.get("ecol" + k))
+      end
+    end
+    if size(self.tids) == 0
+      self.tids.push("0")
+      self.mines.push([0xFFFFFF, 0, "plain"])
+      self.ecols.push(true)
+    end
+    self.ti = 0
+    self.pick(0)
+    self.every = store.get("every")
+    self.post = store.get("post")
+    self.pre = int(store.get("pre"))
+    self.extra = store.get("extra")
+    self.fr = store.get("friendly")
+    self.jump = store.get("jump")
+    var bw = store.get("browse")
+    self.brw = [bw == "knob" || bw == "both", bw == "buttons" || bw == "both"]
+    self.say = store.get("say")
+    self.q1 = int(store.get("q1"))
+    self.q2 = int(store.get("q2"))
+    self.scol = store.get("scol")
+    self.bcol = store.get("bcol")
+    var tp = store.get("topic")
+    self.topic = tp == nil ? "" : str(tp)
+    # language: texts on the display (celebration word, pen/o.g., extra pages) and announcements
+    var de = store.get("lang") != "English"
+    self.de = de
+    self.tab0 = store.get("tab0")
+    var tp2 = store.get("tabpic")
+    self.crest = tp2 == "wappen" || tp2 == "crest"
+    self.curl = nil
+    self.tb0 = nil
+    self.kid = nil
+    self.tq = 0
+    self.lb = de ? ["Schüsse", "Platz ", " Punkte", "heute", "in ", "So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"] :
+                   ["Shots", "Rank ", " points", "today", "in ", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    self.say2 = de ? ["Tor! Tor! Tor! ", "Kein Tor!"] : ["Goal! Goal! Goal! ", "No goal!"]
+    # custom calls, e.g. for a Dutch voice pack; empty = the defaults above
+    self.sg = str(store.get("sgoal"))
+    var sn = str(store.get("snogoal"))
+    if sn != "" self.say2[1] = sn end
+    self.wd = de ? "TOR!" : "GOAL!"              # celebration word in the middle
+    self.sx = de ? [" (11m)", " (ET)"] : [" (pen)", " (o.g.)"]
+    # names ESPN writes without umlauts (part of the name is replaced)
+    self.uml = [["Osnabruck", "Osnabrück"], ["Nurnberg", "Nürnberg"], ["Koln", "Köln"], ["Furth", "Fürth"],
+                ["Munchen", "München"], ["Dusseldorf", "Düsseldorf"], ["Saarbrucken", "Saarbrücken"],
+                ["Monchengladbach", "Mönchengladbach"], ["M'gladbach", "Gladbach"], ["Lubeck", "Lübeck"],
+                ["Wurzburg", "Würzburg"], ["Zurich", "Zürich"]]
+    # ESPN uses English club and country names; in German only the whole name counts ("Austria Lustenau" stays)
+    self.nmap = de ? {"Cologne": "Köln", "FC Cologne": "Köln", "Bayern Munich": "Bayern München", "1860 Munich": "1860 München",
+      "Munich": "München", "Nuremberg": "Nürnberg", "Inter Milan": "Inter Mailand", "Milan": "AC Mailand", "AC Milan": "AC Mailand",
+      "AEK Athens": "AEK Athen", "Slavia Prague": "Slavia Prag", "Sparta Prague": "Sparta Prag", "Rapid Vienna": "Rapid Wien",
+      "Vienna": "Austria Wien", "Austria Vienna": "Austria Wien", "Red Star": "Roter Stern", "Red Star Belgrade": "Roter Stern Belgrad",
+      "København": "Kopenhagen", "Germany": "Deutschland", "Austria": "Österreich", "Switzerland": "Schweiz",
+      "Netherlands": "Niederlande", "Belgium": "Belgien", "France": "Frankreich", "Spain": "Spanien", "Italy": "Italien",
+      "Scotland": "Schottland", "N Ireland": "Nordirland", "Northern Ireland": "Nordirland", "Rep Ireland": "Irland",
+      "Republic of Ireland": "Irland", "Denmark": "Dänemark", "Sweden": "Schweden", "Norway": "Norwegen", "Finland": "Finnland",
+      "Iceland": "Island", "Poland": "Polen", "Czechia": "Tschechien", "Czech Republic": "Tschechien", "Slovakia": "Slowakei",
+      "Slovenia": "Slowenien", "Hungary": "Ungarn", "Croatia": "Kroatien", "Serbia": "Serbien", "Bosnia-Herz": "Bosnien-Herzegowina",
+      "Bosnia-Herzegovina": "Bosnien-Herzegowina", "Albania": "Albanien", "North Macedonia": "Nordmazedonien", "Bulgaria": "Bulgarien",
+      "Romania": "Rumänien", "Greece": "Griechenland", "Türkiye": "Türkei", "Turkey": "Türkei", "Georgia": "Georgien",
+      "Cyprus": "Zypern", "Luxembourg": "Luxemburg", "Russia": "Russland", "Moldova": "Moldau", "Lithuania": "Litauen",
+      "Latvia": "Lettland", "Estonia": "Estland", "Belarus": "Belarus", "Brazil": "Brasilien", "Argentina": "Argentinien",
+      "Mexico": "Mexiko", "Colombia": "Kolumbien", "South Korea": "Südkorea", "Australia": "Australien", "Morocco": "Marokko",
+      "Egypt": "Ägypten", "Tunisia": "Tunesien", "Algeria": "Algerien", "Ivory Coast": "Elfenbeinküste", "Cameroon": "Kamerun",
+      "Saudi Arabia": "Saudi-Arabien", "Canada": "Kanada", "New Zealand": "Neuseeland", "South Africa": "Südafrika"} :
+      {"N Ireland": "Northern Ireland", "Rep Ireland": "Ireland"}
+    # kit 16x16: first/last column for rows 0-5, then the body
+    self.sh = [4, 11, 2, 13, 1, 14, 0, 15, 0, 15, 1, 14, 3, 12]
+    self.bm = [0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF]
+    self.skip = str(store.get("skip", ""))
+    self.ev = nil
+    self.st = ""
+    self.hs = -1
+    self.aws = -1
+    self.cl = 0
+    self.per = 0
+    self.ht = false
+    self.tp = 0
+    self.fin = 0
+    self.hid = ["", ""]
+    self.kh = nil
+    self.ka = nil
+    self.fill = 0
+    self.bc = 0
+    self.flash = 0
+    self.tf = 0
+    self.show = false
+    self.busy = false
+    self.ticks = 0
+    self.mh = true
+    self.nh = ""
+    self.na = ""
+    self.t0 = 0
+    self.gm = true
+    self.kc = [0, 0, 0, 0]
+    self.tl = nil
+    self.pend = ""
+    self.gq = 0
+    self.gg = 1
+    self.gk = 0
+    self.vis = false
+    self.nk = -1
+    self.cq = []
+    self.pz = false
+    self.evl = []
+    self.bi = -1
+    self.reds = [0, 0]
+    self.so = nil
+    self.sot = [0, 0]
+    self.stx = nil
+    self.rk0 = nil
+    self.tbx = nil
+    self.rq = 0
+    self.nx = nil
+    self.lose = 0
+    self.res = 0
+    self.cf = 0
+    self.vf = 0
+    self.vt = 0
+    self.ptx = ["", ""]
+    self.pg = [0]
+    self.tz = 0
+    # background: gentle gradient from the colour at the top to 70 % at the bottom; darker and the LEDs stay off
+    var bo = ["black", "navy", "anthracite", "grass", "bordeaux", "petrol"]
+    var bt = [0, 0x16224A, 0x303036, 0x0E3A18, 0x3C0E18, 0x0A363E]
+    var bi = bo.find(store.get("bg"))
+    self.bgg = nil
+    if bi != nil && bi > 0
+      self.bgg = []
+      for y : 0 .. 15 self.bgg.push(self.col(bt[bi], 1 - 0.3 * y / 15.0)) end
+    end
+    self.gmin = ""
+    self.gnm = ""
+    self.gs = 1
+    self.gt = 0
+    self.gw = -1
+    self.gl = 0
+    self.tn = ["", ""]
+    # ESPN answers some user agents with 403 - curl is accepted
+    self.hd = {'User-Agent': "curl/8.7.1"}
+    self.ol = {'find': "\"status\":{", 'keep': 24000, 'cap': 24000, 'headers': self.hd}   # incl. stats and details
+    self.os = {'find': "\"events\":[", 'keep': 48000, 'cap': 48000, 'headers': self.hd}
+    self.sb = "bpm 120\nvolume 60\ninst b wave=sine attack=0 decay=140 sustain=0 volume=45 echo=20\nb: e5:1 a5:2"
+    # fixed random table: sparks and confetti look equally good every time
+    self.rnd = []
+    var s = 11
+    for i : 0 .. 63
+      s = (s * 1103515245 + 12345) % 2147483648
+      self.rnd.push(((s >> 8) % 1000) / 1000.0)
+    end
+    # referee whistle: kick-off, half-time (2x), full time (3x)
+    var w = "bpm 120\nvolume 60\ninst w wave=sine noise=12 vibrato=60/20 attack=6 decay=1 sustain=100 release=40 volume=70\nw: "
+    self.wh = [w + "f#7:8", w + "f#7:3 r:1 f#7:8", w + "f#7:3 r:1 f#7:3 r:1 f#7:14"]
+    # my team scores: timpani, rising arpeggio, stadium fanfare, roaring crowd
+    self.sj = "bpm 140\nvolume 80\necho time=3 feedback=30 damp=3000\n"
+              "inst boom wave=sine pitch=24/90 noise=40/60 attack=0 decay=500 sustain=0 volume=110\n"
+              "inst up wave=pulse duty=25 attack=0 decay=70 sustain=50 release=90 volume=30 echo=30\n"
+              "inst horn wave=saw unison=12 cutoff=2600 attack=15 decay=1 sustain=100 release=350 volume=34 echo=20\n"
+              "inst crowd wave=noise filter=bp cutoff=1300 resonance=10 attack=250 decay=2600 sustain=0 release=700 volume=55\n"
+              "boom: c2:4 r:4 c2:4 r:4 c2:16\n"
+              "up: g4:1 c5 e5 g5 c6:4 r:8\n"
+              "horn: r:8 [g3 c4 e4]:2 [g3 c4 e4] [g3 c4 e4] [a3 d4 f4] [c4 e4 g4]:16\n"
+              "crowd: c4:32"
+    # the opponent scores: sad trombone
+    self.ss = "bpm 100\nvolume 70\n"
+              "inst tb wave=saw cutoff=1100 vibrato=35/5/350 glide=80 attack=20 decay=1 sustain=100 release=250 volume=60\n"
+              "tb: d4:4 c#4:4 c4:4 b3:14"
+    # VAR rules out the opponent's goal: a sigh of relief
+    self.sv = "bpm 150\nvolume 70\ninst up wave=pulse duty=25 attack=0 decay=70 sustain=50 release=90 volume=40 echo=20\n"
+              "echo time=2 feedback=25 damp=3000\nup: c5:2 e5:2 g5:2 c6:6"
+    # win: victory fanfare and cheering
+    self.fan = "bpm 132\nvolume 80\necho time=3 feedback=25 damp=3000\n"
+               "inst horn wave=saw unison=12 cutoff=2600 attack=15 decay=1 sustain=100 release=350 volume=34 echo=20\n"
+               "inst boom wave=sine pitch=24/90 noise=40/60 attack=0 decay=500 sustain=0 volume=100\n"
+               "inst crowd wave=noise filter=bp cutoff=1300 resonance=10 attack=250 decay=3000 sustain=0 release=800 volume=55\n"
+               "horn: [c4 e4 g4]:3 r:1 [c4 e4 g4]:2 [c4 e4 g4]:2 [c4 e4 g4]:4 [a3 c4 f4]:4 [b3 d4 g4]:4 [c4 e4 g4 c5]:16\n"
+               "boom: c2:4 r:12 r:8 c2:8 c2:16\n"
+               "crowd: c4:48"
+  end
+
+  def pick(k)
+    self.tid = self.tids[k]
+    self.mine = self.mines[k]
+    self.ecol = self.ecols[k]
+  end
+
+  # Easter egg: Germany (ESPN id 481) as your own team wears the 1990 World Cup kit,
+  # whatever kit colours are set. W white, K black, G grey, R red, Y gold, . empty
+  def ger()
+    var s = "....WKGGGGKW......WRKWKGGKWKRW...WWYRKWKKWKRYWW.KWWWYRKWWKRYWWWKWKWWWYRKKRYWWWKW.WKWWWYRRYWWWKW....WWWWYYWWWW..."
+    for i : 7 .. 15 s += "...WWWWWWWWWW..." end
+    var c = {".": 0, "W": 0xFFFFFF, "K": 0x303030, "G": 0x7C7C7C, "R": 0xFF0000, "Y": 0xF4EC00}
+    var k = []
+    for i : 0 .. 255 k.push(c[s[i]]) end
+    return k
+  end
+
+  # one kit as 256 colours (0 = empty): base, pattern, cuffs, V-neck, badge
+  def kit(p, t, pat)
+    var r = (p >> 16) & 255
+    var g = (p >> 8) & 255
+    var b = p & 255
+    if r + g + b < 90
+      p = 0x303030
+      r = 48 g = 48 b = 48
+    end
+    var tr = (t >> 16) & 255
+    var tg = (t >> 8) & 255
+    var tb = t & 255
+    var d = (tr > r ? tr - r : r - tr) + (tg > g ? tg - g : g - tg) + (tb > b ? tb - b : b - tb)
+    if d < 150
+      t = r + g + b > 380 ? 0x202020 : 0xE0E0E0
+      tr = (t >> 16) & 255 tg = (t >> 8) & 255 tb = t & 255
+    elif tr + tg + tb < 60
+      t = 0x202020
+    end
+    var dk = rgb(r * 3 / 10 + 1, g * 3 / 10 + 1, b * 3 / 10 + 1)
+    var bd = rgb((r + tr) / 2, (g + tg) / 2, (b + tb) / 2)
+    var s = self.sh
+    var k = []
+    for y : 0 .. 15
+      var j = y < 6 ? y * 2 : 12
+      for x : 0 .. 15
+        var c = 0
+        if x >= s[j] && x <= s[j + 1]
+          c = p
+          var m = x < 8 ? x : 15 - x            # mirrored: distance from the edge
+          if pat == "stripes" && y >= 2 && (x == 4 || x == 6 || x == 9 || x == 11) c = t
+          elif pat == "hoops" && y >= 6 && (y - 6) % 4 >= 2 c = t
+          elif pat == "checker" && y >= 6 && (x + y) % 3 == 0 c = t
+          elif pat == "sash" && y >= 1 && math.abs(3 * x - 2 * y - 7) <= 4 c = t        # sash
+          elif pat == "halves" && x >= 8 c = t
+          elif pat == "quarters" && (x >= 8) != (y >= 8) c = t
+          elif pat == "band" && y >= 7 && y <= 9 c = t                                 # chest band
+          elif pat == "center" && y >= 2 && x >= 6 && x <= 9 c = t                     # wide centre stripe
+          elif pat == "sleeves" && y >= 2 && y <= 5 && (x < 3 || x > 12) c = t
+          elif pat == "chevron" && y >= 6 && (y - m == 5 || y - m == 6) c = t          # V on the chest
+          elif pat == "fade" && y >= 6
+            c = rgb(r + (tr - r) * (y - 6) / 9, g + (tg - g) * (y - 6) / 9, b + (tb - b) * (y - 6) / 9)
+          end
+          if y >= 3 && y <= 5 && m == y - 3 c = t end
+          if (y == 0 && m >= 6) || (y == 1 && m == 7) c = dk
+          elif (y == 0 && m == 5) || (y == 1 && m == 6) || (y == 2 && m == 7) c = t
+          end
+          if y >= 5 && y <= 6 && x >= 9 && x <= 10 c = bd end
+        end
+        k.push(c)
+      end
+    end
+    return k
+  end
+
+  # Fixtures (all competitions): the first open match as [id, league, kick-off, opponent, home match].
+  # The regex engine cannot handle 40 KB in one piece, so we locate each
+  # match with string.find and only run regexes on small slices. x = skip this match
+  def first(b, x)
+    var i = 0
+    while true
+      var e = string.find(b, "{\"id\":\"", i)
+      if e < 0 return nil end
+      var l = string.find(b, "\"league\":{", e)
+      if l < 0 return nil end
+      var h = re.search("^\\{\"id\":\"(\\d+)\",\"date\":\"(\\d+)-(\\d+)-(\\d+)T(\\d+):(\\d+)", b[e .. e + 60])
+      var s = re.search("\"slug\":\"([^\"]+)\"", b[l .. l + 300])
+      if h == nil || s == nil return nil end
+      if h[1] != x && string.find("," + self.skip + ",", "," + h[1] + ",") < 0 && (self.fr || string.find(s[1], "friendly") < 0)
+        var y = int(h[2])
+        var mo = int(h[3])
+        if mo <= 2 y -= 1 end
+        var dd = y * 365 + y / 4 - y / 100 + y / 400 +
+                 (153 * (mo > 2 ? mo - 3 : mo + 9) + 2) / 5 + int(h[4]) - 1 - 719468
+        var o = ""
+        var hm = false
+        var p = string.find(b, "\"homeAway\":\"", e)
+        for j : 0 .. 1
+          if p < 0 || p > l break end
+          var m = re.search("\"homeAway\":\"(\\w+)\".*?\"team\":\\{\"id\":\"(\\d+)\".*?\"shortDisplayName\":\"([^\"]*)\"", b[p .. p + 600])
+          if m != nil
+            if m[2] == self.tid
+              hm = m[1] == "home"
+            else
+              o = m[3]
+            end
+          end
+          p = string.find(b, "\"homeAway\":\"", p + 10)
+        end
+        return [h[1], s[1], dd * 86400 + int(h[5]) * 3600 + int(h[6]) * 60, o, hm]
+      end
+      i = string.find(b, "isTournament", l)       # skip past the league object
+      if i < 0 return nil end
+    end
+  end
+
+  # fetch the fixtures of every team in turn; the earliest match wins
+  def sched()
+    self.pick(self.sk)
+    http.get("https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/" + self.tid + "/schedule?fixture=true",
+             / b, s -> self.on_sched(b), self.os)
+  end
+
+  def on_sched(b)
+    if b == nil
+      self.sf = true
+    else
+      var f = self.first(b, "")
+      if f != nil && (self.cand == nil || f[2] < self.cand[2])
+        f.push(self.sk)
+        self.cand = f
+      end
+    end
+    self.sk += 1
+    if self.sk < size(self.tids)
+      self.sched()
+      return
+    end
+    self.busy = false
+    var f = self.cand
+    if f == nil
+      if !self.sf self.ev = nil end            # keep the known match on a network error
+      self.pick(self.ti)
+      return
+    end
+    self.ti = f[5]
+    self.pick(self.ti)
+    self.ev = f[0]
+    self.slug = f[1]
+    self.kick = f[2]
+    self.kh = nil
+    self.st = ""
+    # schedule the next request for the preview or kick-off, not 30 minutes later
+    self.ticks = clamp(self.kick - max(120, self.pre * 60) - epoch_ms() / 1000, 1, 1800)
+    log("LiveScore: next match " + self.ev + " (" + self.slug + ")")
+  end
+
+  # after full time: this team's next match for the extra page
+  def nxt()
+    if self.st != "post" return end
+    http.get("https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/" + self.tid + "/schedule?fixture=true",
+             / b, s -> self.on_next(b), self.os)
+  end
+
+  def on_next(b)
+    if b == nil || self.st != "post" return end
+    var f = self.first(b, self.ev)
+    if f == nil || f[3] == "" return end
+    self.nx = [self.day(f[2]), (f[4] ? "vs " : "@ ") + self.nme(f[3])]
+    self.pages()
+  end
+
+  # local time "20:45", or day "Sat 15:30" (within the next 6 days) or "Sat 14.11."
+  def clk(ep)
+    var m = ((ep / 60 + self.tz) % 1440 + 1440) % 1440
+    return string.format("%02d:%02d", m / 60, m % 60)
+  end
+
+  def day(ep)
+    var o = self.tz * 60
+    var d = (ep + o) / 86400
+    var w = self.lb[5 + (d + 4) % 7] + " "
+    if d - (epoch_ms() / 1000 + o) / 86400 < 7 return w + self.clk(ep) end
+    var z = d + 719468
+    var doe = z - (z / 146097) * 146097
+    var yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    var doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    var mp = (5 * doy + 2) / 153
+    return w + str(doy - (153 * mp + 2) / 5 + 1) + "." + str(mp < 10 ? mp + 3 : mp - 9) + "."
+  end
+
+  # table before the match (k = 0) and after full time (k = 1); cups have none and stay quiet
+  def tab(k)
+    if self.ev == nil || (k == 1 && self.st != "post") return end
+    http.get("https://site.api.espn.com/apis/v2/sports/soccer/" + self.slug + "/standings",
+             / b, s -> self.on_tab(b, k),
+             {'find': "{\"team\":{\"id\":\"" + self.tid + "\",", 'keep': 3200, 'headers': self.hd})
+  end
+
+  def on_tab(b, k)
+    if b == nil return end
+    var r = [0, 0, 0]
+    var q = ["rank", "gamesPlayed", "points"]
+    for i : 0 .. 2
+      var m = re.search("\"name\":\"" + q[i] + "\",[^}]*\"value\":([0-9.]+)", b)
+      if m == nil return end
+      r[i] = int(num(m[1]))
+    end
+    if k == 0
+      self.rk0 = r
+      return
+    end
+    if self.rk0 == nil || self.st != "post" return end
+    if r[1] == self.rk0[1]                     # match not counted yet: try again later
+      self.rq += 1
+      if self.rq < 4 timer.after(180000, / -> self.tab(1)) end
+      return
+    end
+    var d = self.rk0[0] - r[0]
+    self.tbx = [self.lb[1] + str(r[0]), str(r[2]) + self.lb[2], d, str(d < 0 ? -d : d)]
+    self.pages()
+  end
+
+  # club and country names for the display and announcements: German name, umlauts, "D Dresden" -> "Dresden"
+  def nme(n)
+    var x = self.nmap.find(n)
+    if x != nil return x end
+    var i1 = re.search("^\\w (.+)", n)
+    if i1 != nil n = i1[1] end
+    for u : self.uml                             # ESPN writes without umlauts: "Osnabruck" -> "Osnabrück"
+      var j = string.find(n, u[0])
+      if j >= 0 n = (j > 0 ? n[0 .. j - 1] : "") + u[1] + n[j + size(u[0]) .. size(n) - 1] end
+    end
+    return n
+  end
+
+  def rx(p, s)
+    var m = re.search(p, s)
+    return m == nil ? nil : m[1]
+  end
+
+  # live state of a match
+  def on_live(b)
+    self.busy = false
+    if b == nil return end
+    var t = re.search("\"name\":\"(STATUS_\\w+)\",\"state\":\"(\\w+)\",\"completed\":(\\w+)", b)
+    var c = re.search("\"clock\":([0-9.]+)", b)
+    var p = re.search("\"period\":(\\d+)", b)
+    # read the two competitor blocks separately (before the match they also hold "Goals" leader lists)
+    var p0 = string.find(b, "\"homeAway\":\"")
+    var p1 = p0 < 0 ? -1 : string.find(b, "\"homeAway\":\"", p0 + 10)
+    if t == nil || p1 < 0 return end
+    var e1 = string.find(b, "\"details\":[", p1)
+    var S = [b[p0 .. p1 - 1], b[p1 .. (e1 < 0 ? p1 + 3500 : e1)]]
+    if string.find(S[0], "\"homeAway\":\"away\"") == 0 S = [S[1], S[0]] end   # home first, whatever order ESPN uses
+    var R = []                                   # per team: id, goals, shootout, winner
+    for s : S
+      var id = self.rx("\"team\":\\{\"id\":\"(\\d+)\"", s)
+      var g = self.rx("\"score\":\"(\\d+)\"", s)
+      if id == nil || g == nil return end
+      var o = self.rx("\"shootoutScore\":(\\d+)", s)
+      R.push([id, int(g), o == nil ? -1 : int(o), string.find(s, "\"winner\":true") >= 0])
+    end
+    if R[0][0] != self.tid && R[1][0] != self.tid return end
+    var h = R[0][1]
+    var a = R[1][1]
+    var old = self.st
+    var oht = self.ht
+    self.st = t[2]
+    self.ht = t[1] == "STATUS_HALFTIME" || string.find(t[1], "END_") >= 0   # break (FIRST_HALF is not one)
+    self.cl = c == nil ? 0 : int(num(c[1]))
+    self.per = p == nil ? 1 : int(p[1])
+    self.tp = now_ms()
+    self.hid = [R[0][0], R[1][0]]
+
+    # kits once per match: opponent in ESPN colours, ours per settings
+    if self.kh == nil
+      var col = []                               # home colour, home trim, away colour, away trim
+      var nn = []
+      for s : S
+        for q : ["color", "alternateColor"]
+          var x = self.rx("\"" + q + "\":\"([0-9A-Fa-f]+)\"", s)
+          var v = 0
+          if x != nil
+            for i : 0 .. size(x) - 1
+              v = v * 16 + string.find("0123456789abcdef0123456789ABCDEF", x[i]) % 16
+            end
+          end
+          col.push(v)
+        end
+        var n = self.rx("\"shortDisplayName\":\"([^\"]*)\"", s)
+        nn.push(self.nme(n == nil ? "" : n))
+      end
+      var mh = R[0][0] == self.tid
+      var M = self.mine
+      var oi = mh ? 2 : 0                        # opponent
+      var mi = 2 - oi
+      var ok = self.kit(col[oi], col[oi + 1], "plain")
+      var mk = self.tid == "481" ? self.ger() : (self.ecol ? self.kit(col[mi], col[mi + 1], M[2]) : self.kit(M[0], M[1], M[2]))
+      self.kh = mh ? mk : ok
+      self.ka = mh ? ok : mk
+      self.mh = mh
+      self.tn = nn
+      self.nh = self.ansage(nn[0])
+      self.na = self.ansage(nn[1])
+      self.colors()
+      if self.extra self.tab(0) end              # remember the league position before the match
+    end
+
+    # goal? VAR? Otherwise whistles at half-time and restart
+    var g = 0
+    var g2 = 0
+    var v = 0
+    if old == "in" && self.st == "in" && self.hs >= 0
+      var dh = h - self.hs
+      var da = a - self.aws
+      if dh < 0 || da < 0
+        v = dh < 0 ? 1 : 2                       # VAR: goal ruled out
+      elif dh + da <= 2                          # more than 2 goals at once = just a resync, no celebration
+        if dh > 0 && da > 0                      # both scored since the last update: mine first
+          g = self.mh ? 1 : 2
+          g2 = 3 - g
+        else
+          g = dh > 0 ? 1 : (da > 0 ? 2 : 0)
+        end
+      end
+      if g == 0 && v == 0
+        if self.ht && !oht
+          self.snd(self.wh[1])
+          self.mq("halftime")
+        elif !self.ht && oht
+          self.snd(self.wh[0])
+          self.mq("restart")
+        end
+      end
+    end
+    if h != self.hs || a != self.aws
+      self.hs = h
+      self.aws = a
+      self.hg = []
+      self.ag = []
+      var s = str(h)
+      for i : 0 .. size(s) - 1 self.hg.push(int(s[i])) end
+      s = str(a)
+      for i : 0 .. size(s) - 1 self.ag.push(int(s[i])) end
+      # 20 columns between the kits (16-35); too wide -> narrow digits
+      self.nar = false
+      var tw = self.wid(self.hg, false) + self.wid(self.ag, false) + 2
+      if tw > 20
+        self.nar = true
+        tw = self.wid(self.hg, true) + self.wid(self.ag, true) + 2
+      end
+      self.hx = 16 + (20 - tw) / 2
+      self.cx = self.hx + self.wid(self.hg, self.nar)
+      self.ax = self.cx + 3
+    end
+    if g > 0 self.goal(g) end
+    if g2 > 0 timer.after(13500, / -> self.goal(g2)) end   # once the first banner is done
+    if v > 0 self.vr(v) end
+
+    # penalty shootout: one dot under the score per penalty scored
+    var so = R[0][2] >= 0 || R[1][2] >= 0 ? [max(R[0][2], 0), max(R[1][2], 0)] : nil
+    if so != nil && self.so != nil && old == "in"
+      for k : 0 .. 1
+        if so[k] > self.so[k]
+          self.sot[k] = now_ms()
+          self.snd(self.sb)
+          self.mq("penalty", k + 1)
+        end
+      end
+    end
+    self.so = so
+
+    # stats: possession and shots per team
+    var X = []
+    for s : S
+      for q : ["possessionPct", "totalShots"]
+        var x = self.rx("\"" + q + "\",\"abbreviation\":\"\\w+\",\"displayValue\":\"([0-9.]+)\"", s)
+        X.push(x == nil ? 0.0 : real(num(x, 0)))
+      end
+    end
+    self.stx = nil
+    if X[0] + X[2] > 0
+      self.stx = [str(int(X[0] + 0.5)) + "%", str(int(X[2] + 0.5)) + "%", str(int(X[1])), str(int(X[3])), X[0] / (X[0] + X[2])]
+    end
+
+    # goals and cards; new cards queue up for the banner
+    var l = self.parse(b)
+    var nc = 0
+    var rd = [0, 0]
+    for x : l
+      if x[0] > 0 nc += 1 end
+      if x[0] == 2 rd[x[1] - 1] += 1 end
+    end
+    self.reds = rd
+    if self.nk >= 0 && nc > self.nk && old == "in" && self.st == "in"
+      var k = nc - self.nk
+      var j = size(l) - 1
+      var nw = []
+      while j >= 0 && k > 0
+        if l[j][0] > 0
+          nw.insert(0, l[j])
+          k -= 1
+        end
+        j -= 1
+      end
+      for x : nw
+        self.cq.push([x[0], x[1], x[2], x[3], now_ms(), false])
+        self.mq(x[0] == 2 ? "red_card" : "yellow_card", x[1], x[2], x[3])
+      end
+    end
+    if nc > self.nk || self.nk < 0 self.nk = nc end
+    self.evl = l
+    self.lose = self.st == "post" ? (R[0][3] ? 2 : (R[1][3] ? 1 : 0)) : 0   # loser: kit dimmed
+
+    var now = epoch_ms() / 1000
+    if self.st == "in"
+      if old == "pre" && self.cl < 600           # kick-off (not for a stale ESPN answer mid-match)
+        self.snd(self.wh[0])
+        self.mq("kickoff")
+      end
+      if old != "in" && self.jump rotation.show() end
+      self.show = true
+      self.fin = 0
+    elif self.st == "post"
+      if old == "in"                             # full time: three whistles, confetti and fanfare for a win
+        self.snd(self.wh[2])
+        self.res = self.lose == 0 ? 0 : ((self.lose == 2) == self.mh ? 1 : -1)
+        self.mq("fulltime")
+        if self.res > 0
+          self.cf = now_ms() + 2000
+          timer.after(2400, / -> self.snd(self.fan))
+        end
+        if self.jump rotation.show() end
+        if self.extra
+          timer.after(20000, / -> self.nxt())
+          timer.after(90000, / -> self.tab(1))
+        end
+      end
+      if t[3] == "true" && self.post > 0
+        if self.fin == 0 self.fin = now end
+        self.show = true
+        self.ticks = self.post * 60 + 5          # final score is in, stop polling
+      else
+        self.done()                              # cancelled/postponed
+      end
+    elif now > self.kick + 4 * 3600
+      self.done()                                # never kicked off
+    end
+    self.pages()
+  end
+
+  # goals and cards from the ESPN details: [kind (0 goal, 1 yellow, 2 red), side (1 home, 2 away), minute, player]
+  def parse(b)
+    var l = []
+    var i = string.find(b, "\"details\":[")
+    if i < 0 return l end
+    i = string.find(b, "{\"type\":{\"id\":\"", i)
+    while i >= 0
+      var j = string.find(b, "{\"type\":{\"id\":\"", i + 10)
+      var e = b[i .. (j < 0 || j - i > 900 ? i + 900 : j - 1)]
+      var k = string.find(e, "\"redCard\":true") >= 0 ? 2 : (string.find(e, "\"yellowCard\":true") >= 0 ? 1 : 0)
+      if k > 0 || (string.find(e, "\"scoringPlay\":true") >= 0 && string.find(e, "\"shootout\":false") >= 0)
+        var m = self.rx("\"displayValue\":\"([^\"]+)\"", e)
+        var t = self.rx("\"team\":\\{\"id\":\"(\\d+)\"", e)
+        var a = self.rx("\"shortName\":\"([^\"]+)\"", e)
+        var s = t == self.hid[1] ? 2 : 1
+        var x = m != nil ? m : str(self.cl / 60 + 1) + "'"
+        var p = string.find(x, "'+")            # "90'+3'" -> "90+3'"
+        if p >= 0 x = x[0 .. p - 1] + x[p + 1 .. size(x) - 1] end
+        var n = a != nil ? a : self.tn[s - 1]
+        if k == 0
+          if string.find(e, "\"penaltyKick\":true") >= 0 n += self.sx[0] end
+          if string.find(e, "\"ownGoal\":true") >= 0 n += self.sx[1] end
+        end
+        l.push([k, s, x, n])
+      end
+      i = j
+    end
+    return l
+  end
+
+  # goal celebration: fireworks, jingle, announcement (g = 1 home, 2 away)
+  def goal(g)
+    var my = (g == 1) == self.mh
+    self.flash = g
+    self.gm = my
+    self.tf = now_ms()
+    self.gg = g
+    self.gs = g
+    self.gk = 0
+    self.gt = 0
+    self.gq = 0
+    self.gmin = str(self.cl / 60 + 1) + "'"      # fallback until ESPN names the scorer
+    self.gnm = self.tn[g - 1]
+    self.dets()
+    if self.jump rotation.show() end
+    self.snd(my ? self.sj : self.ss)
+    if self.say == "all" || (self.say == "mine" && my)
+      self.pend = g == 1 ? self.nh : self.na
+      timer.after(2800, / -> self.speak())
+    end
+    self.mq("goal", g)
+  end
+
+  # VAR rules out a goal (g = side whose goal does not count)
+  def vr(g)
+    var my = (g == 1) == self.mh
+    self.vf = g
+    self.vt = now_ms()
+    self.flash = 0
+    self.gq = 99                                 # stop looking for the scorer
+    if self.gk == 0 self.gt = 0 end              # drop the goal banner
+    if self.jump rotation.show() end
+    self.snd(self.wh[0])
+    timer.after(1500, / -> self.snd(my ? self.ss : self.sv))
+    if self.say == "all" || self.say == "mine"
+      self.pend = self.say2[1]
+      timer.after(2200, / -> self.speak())
+    end
+    self.mq("var", g)
+  end
+
+  # kit colours for sparks and the new digit: base (chest) and trim (collar),
+  # lifted to full brightness so dark kits shine too
+  def colors()
+    var kc = [self.kh[163], self.ka[163], self.kh[48], self.ka[48]]
+    for j : 0 .. 3
+      var c = kc[j]
+      var m = max(max((c >> 16) & 255, (c >> 8) & 255), c & 255)
+      kc[j] = m == 0 ? 0xC0C0C0 : rgb(((c >> 16) & 255) * 255 / m, ((c >> 8) & 255) * 255 / m, (c & 255) * 255 / m)
+    end
+    # stats colours (kc[4], kc[5]): if both kits look too alike, the away team uses its trim or grey
+    var b = kc[1]
+    for c : [kc[3], 0x707070]
+      var d = 0
+      for s : [0, 8, 16] d += math.abs(((kc[0] >> s) & 255) - ((b >> s) & 255)) end
+      if d >= 150 break end
+      b = c
+    end
+    kc.push(kc[0])
+    kc.push(b)
+    if self.tid == "481" kc[self.mh ? 2 : 3] = 0xFF0000 end   # 1990 kit: sparks in white, red and gold
+    self.kc = kc
+  end
+
+  # fetch scorer and minute (ESPN "details"); if they arrive late, ask up to 4 times
+  def dets()
+    if self.ev == nil return end
+    http.get("https://site.api.espn.com/apis/site/v2/sports/soccer/" + self.slug + "/scoreboard/" + self.ev,
+             / b, s -> self.on_det(b), self.ol)
+  end
+
+  def on_det(b)
+    if self.gq > 50 return end                   # VAR ruled the goal out
+    self.gq += 1
+    var l = b == nil ? [] : self.parse(b)
+    var n = 0
+    var f = nil
+    var fa = nil
+    for x : l
+      if x[0] == 0
+        n += 1
+        fa = x
+        if x[1] == self.gg f = x end             # the latest goal of the side that just scored
+      end
+    end
+    if n < self.hs + self.aws && self.gq < 4
+      timer.after(15000, / -> self.dets())
+      return
+    end
+    if f == nil f = fa end
+    if f != nil
+      self.gmin = f[2]
+      self.gnm = f[3]
+    end
+    self.gs = self.gg
+    self.gk = 0
+    self.gw = -1
+    self.gt = now_ms()
+    var w = self.tf + 4600 - self.gt
+    timer.after(w > 25 ? w : 25, / -> self.snd(self.sb))
+    self.mq("scorer", self.gg, self.gmin, self.gnm)
+  end
+
+  # start the banner for an event [kind, side, minute, player]
+  def banner(c)
+    self.gk = c[0]
+    self.gs = c[1]
+    self.gmin = c[2]
+    self.gnm = c[3]
+    self.gw = -1
+    self.gt = now_ms()
+  end
+
+  # stay on the panel longer after a goal: celebration plus banner; show all extra pages
+  def duration()
+    var n = now_ms()
+    if self.flash > 0 && n - self.tf < 3000 return 15000 end
+    if self.vf > 0 && n - self.vt < 2000 return 9000 end
+    if self.cf > 0 && n < self.cf + 3000 return 12000 end   # show the whole win celebration
+    if self.bq(n) >= 0 || size(self.cq) > 0 return 10000 end
+    var k = size(self.pg)
+    if k > 1 return 6000 + 4000 * (k - 1) end
+    return 0
+  end
+
+  # banner (rows 8-15) slides up from below and may briefly cover the digits:
+  # minute in a team-coloured box, the scorer next to it
+  # card above the minute box: slides up from behind it, springs, bobs; a shine runs across
+  def card(q, pw, yo, now)
+    var a = q - 0.3                              # starts once the banner is up
+    if a < 0 return end
+    var out = q > 7.9 ? 1 - (q - 7.9) / 0.4 : 1.0
+    if out <= 0 return end
+    var c = self.col(self.gk == 1 ? 0xFFD000 : 0xE81818, out)
+    var hi = self.col(self.gk == 1 ? 0xFFF4A0 : 0xFF8080, out)
+    var x = pw / 2 - 2
+    var y = int(8 - 7 * self.ez(a / 0.35) + (a < 0.6 ? math.sin(a / 0.6 * 3.1416) * -1.5 : 0) + 0.5)
+    if a > 0.6 y = 1 + (math.sin(now * 0.006) > 0.6 ? -1 : 0) end
+    var h = 8 - y < 6 ? 8 - y : 6               # still hidden below the edge of the box
+    if h <= 0 return end
+    rect_fill(x - 1, y - 1, 7, h + 2, 0x101014)
+    rect_fill(x, y, 5, h, c)
+    rect_fill(x, y, 1, h, hi)
+    var ph = (now % 1500) / 1500.0
+    if a > 0.6 && ph < 0.3 pixel(x + int(ph / 0.3 * 5), y + 1, self.col(0xFFFFFF, out)) end
+  end
+
+  def bq(now)
+    if self.gt == 0 return -1 end
+    var s0 = self.gk > 0 || self.gt > self.tf + 4600 ? self.gt : self.tf + 4600
+    var q = (now - s0) / 1000.0
+    return q < 8.4 ? q : -1
+  end
+
+  def band(q, now)
+    font("small")
+    var yo = int(8 * (1 - self.ez(q / 0.35)) + 0.5)
+    if q > 8.05 yo = int(8 * self.ez((q - 8.05) / 0.35) + 0.5) end
+    var kc = self.kc[self.gs - 1]
+    var pc = kc   # card: box in yellow/red
+    if self.gw < 0
+      self.gw = text_width(self.gmin)
+      self.gl = text_ink_width(self.gnm)
+    end
+    var lx = int((now % 2400) / 2400.0 * 80) - 14
+    for x : 0 .. 51
+      var d = math.abs(x - lx)
+      rect_fill(x, 8 + yo, 1, 8, self.col(kc, d < 6 ? 0.16 + (6 - d) * 0.025 : 0.16))
+    end
+    var pw = self.gw + 3
+    var lum = ((pc >> 16) & 255) * 3 + ((pc >> 8) & 255) * 6 + (pc & 255)
+    rect_fill(0, 8 + yo, pw, 8, pc)
+    text(2, 14 + yo, self.gmin, lum > 1300 ? 0x101010 : 0xFFFFFF)
+    if self.gk > 0 self.card(q, pw, yo, now) end
+    var x0 = pw + 3
+    var nc = self.mix(0x404040, 0xFFFFFF, self.ez((q - 0.35) / 0.4))
+    if self.gl <= 52 - x0
+      text(x0, 14 + yo, self.gnm, nc)        # 8 rows tall: room for descenders (g, y, p, j, q)
+    else
+      scroll_text(x0, 14 + yo, 52 - x0, self.gnm, nc)
+    end
+  end
+
+  # quiet hours or sound off: silent
+  def hush()
+    var h = hour()
+    if self.say == "off" return true end
+    if self.q1 == self.q2 return false end
+    return self.q1 < self.q2 ? (h >= self.q1 && h < self.q2) : (h >= self.q1 || h < self.q2)
+  end
+
+  def snd(x)
+    if self.hush() return end
+    try sound.effect({'song': x}) except .. as e, m log("LiveScore: " + str(m)) end
+  end
+
+  # goal call for a team: language default or custom text with {team}
+  def ansage(n)
+    var t = self.sg
+    if t == "" return self.say2[0] + n + "!" end
+    if string.find(t, "{team}") >= 0 return string.replace(t, "{team}", n) end
+    return t + " " + n
+  end
+
+  def speak()
+    if self.hush() return end
+    try sound.play({'speech': self.pend}) except .. end
+  end
+
+  # MQTT: event as JSON, e.g. {"event":"goal","team":"Bayern","mine":true,"score":"2:1",...}
+  def mq(e, g, m, p)
+    if self.topic == "" return end
+    var d = {"event": e, "home": self.tn[0], "away": self.tn[1], "score": str(self.hs) + ":" + str(self.aws)}
+    if g != nil && g > 0
+      d["team"] = self.tn[g - 1]
+      d["mine"] = (g == 1) == self.mh
+      d["color"] = string.format("#%06X", self.kc[g - 1])
+    end
+    if m != nil d["minute"] = m end
+    if p != nil d["player"] = p end
+    if e == "fulltime" d["result"] = self.res > 0 ? "win" : (self.res < 0 ? "loss" : "draw") end
+    try mqtt.publish(self.topic, json.dump(d)) except .. end
+  end
+
+  # pages shown in turn: 0 score, 1 stats, 2 table, 3 next match, 4 league position
+  def pages()
+    var p = [0]
+    if self.extra && self.kh != nil
+      if (self.ht || self.st == "post") && self.stx != nil p.push(1) end
+      if self.st == "post"
+        if self.tbx != nil p.push(2) end
+        if self.nx != nil p.push(3) end
+      end
+    end
+    if self.st == "pre" && self.tab0 && self.tb0 != nil && self.kid != nil p.push(4) end   # preview alternating with the league position
+    self.pg = p
+  end
+
+  # tick the match off and look at the fixtures again (remember the last two matches)
+  def done()
+    if self.ev != nil
+      var i = string.find(self.skip, ",")
+      self.skip = self.ev + "," + (i < 0 ? self.skip : self.skip[0 .. i - 1])
+      store.set("skip", self.skip)
+    end
+    self.ev = nil
+    self.st = ""
+    self.show = false
+    self.fin = 0
+    self.flash = 0
+    self.hs = -1
+    self.aws = -1
+    self.ticks = 0
+    self.kh = nil
+    self.nk = -1
+    self.cq = []
+    self.evl = []
+    self.reds = [0, 0]
+    self.so = nil
+    self.stx = nil
+    self.rk0 = nil
+    self.tbx = nil
+    self.rq = 0
+    self.nx = nil
+    self.lose = 0
+    self.res = 0
+    self.cf = 0
+    self.vf = 0
+    self.pg = [0]
+    self.tq = 600                                # new league position after the match
+  end
+
+  def loop()
+    var now = epoch_ms() / 1000
+    if now <= 0 return end
+    self.tz = (hour() * 60 + minute() - (now / 60) % 1440 + 2160) % 1440 - 720   # local time minus UTC in minutes
+    if self.fin > 0 && now - self.fin >= self.post * 60 self.done() end
+    var n = now_ms()
+
+    # bar: 22 cells = 90 minutes, extra time orange, break amber, full time grey
+    if self.st == "in"
+      var m = self.cl
+      if !self.ht m += clamp((n - self.tp) / 1000, 0, 120) end
+      if self.per >= 5
+        self.fill = 22 self.bc = 0xFF6000
+      elif self.per >= 3
+        self.fill = clamp((m - 5400) * 22 / 1800, 0, 22) self.bc = 0xFF6000
+      else
+        self.fill = clamp(m * 22 / 5400, 0, 22) self.bc = self.ht ? 0xFFB000 : self.bcol
+      end
+    elif self.st == "post"
+      self.fill = 22
+      self.bc = 0x909090
+    elif self.st == "pre" && self.kh != nil      # preview: kick-off time and countdown
+      var r = self.kick - now
+      self.show = self.pre > 0 && r <= self.pre * 60
+      if self.show
+        self.ptx[0] = self.clk(self.kick)
+        self.ptx[1] = r >= 3600 ? self.lb[3] : (r >= 600 ? self.lb[4] + str((r + 59) / 60) + "'" :
+                      (r > 0 ? string.format("%d:%02d", r / 60, r % 60) : "0:00"))
+      end
+    end
+    if self.flash > 0 && n - self.tf > 6000 self.flash = 0 end
+    if self.vf > 0 && n - self.vt > 6000 self.vf = 0 end
+    if self.cf > 0 && n - self.cf > 7000 self.cf = 0 end
+
+    # show cards one after another; yellow waits for the next turn (at most 3 min), red brings the app to the front
+    var q = self.bq(n)
+    if self.pz && q < 0
+      rotation.resume()
+      self.pz = false
+    end
+    if size(self.cq) > 0 && self.flash == 0 && q < 0
+      var c = self.cq[0]
+      if n - c[4] > 180000
+        self.cq.remove(0)
+      elif self.vis
+        self.cq.remove(0)
+        self.banner(c)
+        self.snd(self.wh[0])
+        rotation.pause()                         # the rotation waits until the banner is done
+        self.pz = true
+      elif c[0] == 2 && self.jump && !c[5]
+        c[5] = true
+        rotation.show()
+      end
+    end
+
+    if self.tab0                                 # league position: hourly, 10 min after a match
+      self.tq -= 1
+      if self.tq <= 0
+        self.tq = 3600
+        self.team0()
+      end
+    end
+
+    self.ticks -= 1
+    if self.ticks > 0 || self.busy return end
+    var base = "https://site.api.espn.com/apis/site/v2/sports/soccer/"
+    var w = max(120, self.pre * 60)
+    self.busy = true
+    if self.ev != nil && now >= self.kick - w
+      self.ticks = now < self.kick - 120 ? clamp(self.kick - 120 - now, 5, 240) : self.every
+      http.get(base + self.slug + "/scoreboard/" + self.ev, / b, s -> self.on_live(b), self.ol)
+    else
+      self.ticks = self.ev == nil ? 1800 : clamp(self.kick - w - now, 5, 1800)
+      self.sk = 0
+      self.cand = nil
+      self.sf = false
+      self.sched()
+    end
+  end
+
+  def should_show()
+    return self.show || (self.tab0 && self.tb0 != nil && self.kid != nil)
+  end
+
+  # league position between matches: ESPN team page of the first team (position, points, games, colours)
+  def team0()
+    http.get("https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/" + self.tids[0],
+             / b, s -> self.on_team(b), {'find': "\"team\":{", 'keep': 24000, 'cap': 24000, 'headers': self.hd})
+  end
+
+  def on_team(b)
+    if b == nil return end
+    var j = string.find(b, "\"Overall Record\"")
+    if string.find(b, "\"standingSummary\":\"") < 0 || j < 0
+      self.tb0 = nil                             # no league position, e.g. for national teams
+      return
+    end
+    var w = b[j .. j + 3000]
+    var r = [0, 0, 0]
+    var q = ["rank", "gamesPlayed", "points"]
+    for k : 0 .. 2
+      var m = self.rx("\"name\":\"" + q[k] + "\",\"value\":([0-9.]+)", w)
+      if m == nil return end
+      r[k] = int(num(m))
+    end
+    if r[0] <= 0 return end
+    var o = store.get("rk")                      # position after the last matchday: gives the arrow
+    var d = 0
+    if isinstance(o, list) && size(o) == 3
+      d = o[1] != r[1] ? o[0] - r[0] : o[2]
+    end
+    store.set("rk", [r[0], r[1], d])
+    var n = r[0]
+    var t = str(n) + "."
+    if !self.de
+      t = str(n) + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th"][n % 10])
+    end
+    self.tb0 = [t, str(r[2]) + self.lb[2], d, str(d < 0 ? -d : d)]
+    var M = self.mines[0]
+    if self.ecols[0]
+      var a = b[0 .. 400]
+      self.kid = self.kit(self.hexv(self.rx("\"color\":\"([0-9A-Fa-f]+)\"", a)), self.hexv(self.rx("\"alternateColor\":\"([0-9A-Fa-f]+)\"", a)), M[2])
+    else
+      self.kid = self.kit(M[0], M[1], M[2])
+    end
+    # club crest from ESPN, 16x16 and filled with the background colour (the clock draws transparent corners black)
+    self.curl = "https://wsrv.nl/?url=a.espncdn.com/i/teamlogos/soccer/500/" + self.tids[0] + ".png&w=16&h=16&output=png&bg=" +
+                string.format("%06X", self.bgg == nil ? 0 : self.bgg[7])
+    if self.kh != nil self.pages() end
+  end
+
+  def hexv(x)
+    var v = 0
+    if x == nil return 0 end
+    for i : 0 .. size(x) - 1
+      v = v * 16 + string.find("0123456789abcdef0123456789ABCDEF", x[i]) % 16
+    end
+    return v
+  end
+
+  # between matches: my kit flies in, the position in big digits with an arrow, points below
+  def idle(e, now)
+    var ph = (now % 4500) / 1600.0
+    var o = -int(17 * (1 - self.ez(e / 0.55)))   # kit or crest flies in from the left
+    if !self.crest || self.curl == nil || !icon(self.curl, o, 0)   # kit until the crest has loaded
+      self.kd(self.kid, o, 0, false, ph < 1 ? int(ph * 74) - 4 : -99)
+    end
+    var T = self.tb0
+    var ox = int(36 * (1 - self.ez((e - 0.25) / 0.4)) + 0.5)   # the text slides in from the right
+    font("small")
+    var aw = T[2] == 0 ? 0 : 10 + text_ink_width(T[3])
+    font("large")
+    var w = text_ink_width(T[0])
+    var x = 34 - (w + aw) / 2 + ox
+    text(x, 7, T[0], self.scol)
+    font("small")
+    if T[2] != 0
+      var c = T[2] > 0 ? 0x30E030 : 0xFF4040
+      x += w + 4
+      for r : 0 .. 2
+        rect_fill(x + 2 - r, T[2] > 0 ? 3 + r : 5 - r, 1 + 2 * r, 1, c)
+      end
+      text(x + 6, 7, T[3], c)
+    end
+    text(34 - text_ink_width(T[1]) / 2 + ox, 14, T[1], 0xA0A0A0)
+  end
+
+  def on_hide()
+    self.vis = false
+    self.pz = false
+  end
+
+  def on_show()
+    var n = now_ms()
+    self.vis = true
+    self.bi = -1
+    self.t0 = n                                  # restart the fly-in animation
+    if self.flash > 0 && n - self.tf < 1500 self.tf = n end   # celebration starts once visible
+    if self.vf > 0 && n - self.vt < 1500 self.vt = n end
+    if self.cf > 0 && n >= self.cf && n - self.cf < 1500 self.cf = n end
+  end
+
+  def col(c, f)
+    if f <= 0 return 0 end
+    if f >= 1 return c end
+    return (int(((c >> 16) & 255) * f) << 16) | (int(((c >> 8) & 255) * f) << 8) | int((c & 255) * f)
+  end
+
+  def mix(a, b, f)
+    if f <= 0 return a end
+    if f >= 1 return b end
+    var r = ((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * f
+    var g = ((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * f
+    var l = (a & 255) + ((b & 255) - (a & 255)) * f
+    return (int(r) << 16) | (int(g) << 8) | int(l)
+  end
+
+  def ez(t)
+    t = clamp(t, 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+  end
+
+  # score in block digits (2x), rows 1-10; sw = position of the shine
+  # width of a digit list: 7 px per digit (6 narrow), the slim 1 only 5
+  def wid(g, nar)
+    var w = 0
+    for d : g w += d == 1 ? 5 : (nar ? 6 : 7) end
+    return w
+  end
+
+  def paint(g, x, yo, c, sw)
+    var nar = self.nar
+    for d : g
+      if d == 1                                  # slim 1: short flag, 2 px stem, no foot
+        for r : 0 .. 5
+          var px = r == 5 ? x : x + 2
+          var py = (r == 5 ? 2 : r * 2) + 1 + yo
+          var dd = px + py - sw
+          rect_fill(px, py, 2, 2, dd >= 0 && dd < 3 ? self.mix(c, 0xFFFFFF, dd == 1 ? 0.6 : 0.3) : c)
+        end
+        x += 5
+        continue
+      end
+      var b = self.bm[d]
+      for r : 0 .. 4
+        for k : 0 .. 2
+          if (b >> (14 - r * 3 - k)) & 1
+            var px = nar ? x + (k == 0 ? 0 : k + 1) : x + k * 2
+            var py = r * 2 + 1 + yo
+            var dd = px + py - sw
+            var cc = dd >= 0 && dd < 3 ? self.mix(c, 0xFFFFFF, dd == 1 ? 0.6 : 0.3) : c
+            rect_fill(px, py, nar && k == 1 ? 1 : 2, 2, cc)
+          end
+        end
+      end
+      x += nar ? 6 : 7
+    end
+  end
+
+  # draw a kit: o = left column, dy = jump, dm = dimmed (loser), sw = shine
+  def kd(k, o, dy, dm, sw)
+    var i = 0
+    for y : 0 .. 15
+      for x : 0 .. 15
+        var c = k[i]
+        if c
+          if dm                                  # loser: grey instead of dark, so it stays visible on any background
+            var l = 40 + (((c >> 16) & 255) * 3 + ((c >> 8) & 255) * 6 + (c & 255)) / 20
+            c = rgb(l, l, l)
+          end
+          var d = o + x + y - sw
+          if d >= 0 && d < 3 c = self.mix(c, 0xFFFFFF, d == 1 ? 0.55 : 0.25) end
+          pixel(o + x, y + dy, c)
+        end
+        i += 1
+      end
+    end
+  end
+
+  # the celebration word pops in letter by letter
+  def tor(now, t, my, kc)
+    if self.tl == nil
+      font("large")
+      var f = "large"
+      if text_ink_width(self.wd) > 20
+        font("small")
+        f = "small"
+      end
+      var x = 16 + (20 - text_ink_width(self.wd)) / 2
+      self.tl = [f, x]
+      for i : 0 .. size(self.wd) - 2
+        self.tl.push(x + text_width(self.wd[0 .. i]))
+      end
+      self.tl.push(f == "large" ? 9 : 8)
+    end
+    var L = self.tl
+    font(L[0])
+    var out = t > 2.7 ? (3.0 - t) / 0.3 : 1.0
+    var n = size(self.wd) - (my ? 0 : 1)       # without "!" when the opponent scores
+    for k : 0 .. n - 1
+      var a = t - 0.2 - k * 0.1
+      if a > 0
+        var yy = L[-1] - (a < 0.25 ? int(math.sin(a / 0.25 * 3.1416) * 3 + 0.5) : 0)
+        var c = my ? hsv(int(now / 3 + k * 50) % 360, 70, 100) : self.mix(kc, 0x606060, 0.5)
+        text(L[k + 1], yy, self.wd[k], self.col(c, out))
+      end
+    end
+    font("small")
+  end
+
+  # VAR: the referee draws the screen in the air, "VAR" blinks, then it all turns red - no goal
+  def vard(vt, now)
+    var out = vt > 2.7 ? (3.0 - vt) / 0.3 : 1.0
+    var red = vt > 1.6
+    var c = self.col(red ? 0xFF3030 : 0xFFFFFF, out)
+    var k = int(54 * clamp(vt / 0.7, 0.0, 1.0))
+    var x = 17 + (red && vt < 2.2 ? int(math.sin(vt * 40) * 1.5) : 0)   # shaking its head
+    var x0 = x
+    var y = 1
+    for i : 0 .. 53
+      if i >= k break end
+      pixel(x, y, c)
+      if i < 17
+        x += 1
+      elif i < 27
+        y += 1
+      elif i < 44
+        x -= 1
+      else
+        y -= 1
+      end
+    end
+    if vt > 0.7
+      font("small")
+      var a = red ? 1.0 : 0.55 + 0.45 * math.sin((vt - 0.7) * 12)
+      text(x0 + 9 - text_ink_width("VAR") / 2, 9, "VAR", self.col(red ? 0xFF3030 : 0xFFFFFF, out * a))
+    end
+  end
+
+  # fireworks above the scoring kit, then confetti across the panel (g = 0: only confetti for a win)
+  def fx(t, g)
+    var kc = self.kc
+    if g > 0
+      for b : 0 .. 2
+        var u = t - 0.25 - b * 0.65
+        var cx = b == 2 ? 26 : ((b == 0) == (g == 1) ? 8 : 44)
+        var cy = 3 + b
+        if u < 0 && u > -0.3                     # rocket rising
+          var ry = int(cy + (16 - cy) * (-u / 0.3))
+          pixel(cx, ry, 0xFFE0A0)
+          pixel(cx, ry + 1, 0x804010)
+        elif u >= 0 && u < 1.3
+          if u < 0.1 circle_fill(cx, cy, 2, self.col(0xFFFFFF, 1 - u / 0.1)) end
+          for i : 0 .. 17
+            var r = self.rnd[(i + b * 19) % 64]
+            var a = i * 0.349 + r
+            var sp = 9 + r * 14
+            var x = cx + math.cos(a) * sp * u
+            var y = cy + math.sin(a) * sp * u * 0.6 + 7 * u * u
+            var c = i % 3 == 0 ? 0xFFD040 : kc[(i % 3 == 1 ? 0 : 2) + g - 1]
+            pixel(int(x + 0.5), int(y + 0.5), self.col(c, 1 - u / 1.3))
+          end
+        end
+      end
+    end
+    var mi = self.mh ? 0 : 1
+    var dens = clamp((t - 0.4) * 2, 0.0, 1.0) * clamp((5.5 - t) * 0.5, 0.0, 1.0)
+    if dens > 0
+      for i : 0 .. 25
+        var sp = 4 + self.rnd[i] * 5
+        var y = (self.rnd[i + 26] * 16 + t * sp) % 20.0 - 3
+        var x = int(self.rnd[(i + 40) % 64] * 52 + math.sin(t * 3 + i) * 1.5)
+        var tw = math.sin(t * (6 + self.rnd[i] * 6) + i) > 0
+        var c = g > 0 ? hsv(int(self.rnd[(i + 13) % 64] * 360), 75, 100) :
+                (i % 3 == 0 ? 0xFFD040 : (i % 3 == 1 ? kc[mi] : 0xFFFFFF))   # win: gold, club colour, white
+        pixel(x, int(y), self.col(c, dens * (tw ? 1.0 : 0.4)))
+      end
+    end
+  end
+
+  # extra pages slide in from the right: 1 stats, 2 table, 3 next match
+  def page(p, pt, now)
+    if p == 4                                    # league position (during the preview)
+      self.idle(pt / 1000.0, now)
+      return
+    end
+    var ox = int(52 * (1 - self.ez(pt / 350.0)) + 0.5)
+    var kc = self.kc
+    font("small")
+    if p == 1                                    # possession (bar) and shots
+      var S = self.stx
+      var c0 = kc[4]
+      var c1 = kc[5]
+      text(1 + ox, 6, S[0], c0)
+      text(51 - text_ink_width(S[1]) + ox, 6, S[1], c1)
+      rect_fill(25 + ox, 1, 3, 5, 0xE8E8E8)      # ball
+      rect_fill(24 + ox, 2, 5, 3, 0xE8E8E8)
+      pixel(26 + ox, 3, 0x303030)
+      pixel(26 + ox, 1, 0x606060)
+      pixel(24 + ox, 3, 0x606060)
+      pixel(28 + ox, 3, 0x606060)
+      pixel(26 + ox, 5, 0x606060)
+      var w = int(52 * S[4] + 0.5)
+      var f = self.ez((pt - 250) / 500.0)        # the bar grows from the middle
+      var m = 26 + int((w - 26) * f)
+      rect_fill(ox, 8, m, 2, self.col(c0, 0.75))
+      rect_fill(ox + m, 8, 52 - m, 2, self.col(c1, 0.75))
+      rect_fill(ox + m, 8, 1, 2, 0x101010)
+      text(1 + ox, 15, S[2], c0)
+      text(51 - text_ink_width(S[3]) + ox, 15, S[3], c1)
+      text(26 - text_ink_width(self.lb[0]) / 2 + ox, 15, self.lb[0], 0x909090)
+      return
+    end
+    if p == 2                                    # league position with arrow, points below
+      var T = self.tbx
+      var aw = T[2] == 0 ? 0 : 9 + text_ink_width(T[3])
+      var x = 26 - (text_ink_width(T[0]) + aw) / 2 + ox
+      text(x, 7, T[0], self.scol)
+      if T[2] != 0
+        x += text_ink_width(T[0]) + 4
+        var up = T[2] > 0
+        var c = up ? 0x30E030 : 0xFF4040
+        for r : 0 .. 2
+          rect_fill(x + 2 - r, up ? 3 + r : 5 - r, 1 + 2 * r, 1, c)
+        end
+        text(x + 6, 7, T[3], c)
+      end
+      text(26 - text_ink_width(T[1]) / 2 + ox, 14, T[1], 0xA0A0A0)
+      return
+    end
+    self.kd(self.mh ? self.kh : self.ka, ox, 0, false, -99)   # my kit on the left, the text on the right
+    var N = self.nx                              # next match: day and time, opponent
+    text(34 - text_ink_width(N[0]) / 2 + ox, 7, N[0], self.scol)
+    var w = text_ink_width(N[1])
+    if w <= 34
+      text(34 - w / 2 + ox, 14, N[1], 0xA0A0A0)
+    else
+      scroll_text(17 + ox, 14, 35, N[1], 0xA0A0A0)
+    end
+  end
+
+  def draw()
+    clear()
+    if self.bgg != nil
+      for y : 0 .. 15 rect_fill(0, y, 52, 1, self.bgg[y]) end
+    end
+    var now = now_ms()
+    if !self.show && self.tb0 != nil && self.kid != nil   # between matches: league position
+      self.idle((now - self.t0) / 1000.0, now)
+      return
+    end
+    if self.kh == nil || self.hg == nil
+      for i : 0 .. 2                             # three bouncing dots instead of "..."
+        var v = 0.5 + 0.5 * math.sin(now * 0.006 - i * 1.2)
+        rect_fill(21 + i * 4, 7 - int(v * 2 + 0.5), 2, 2, self.col(0x8080A0, 0.25 + 0.75 * v))
+      end
+      return
+    end
+    var g = self.flash
+    var t = g > 0 ? (now - self.tf) / 1000.0 : 99.0
+    if t >= 5.5 g = 0 end
+    var my = self.gm
+    var vt = self.vf > 0 ? (now - self.vt) / 1000.0 : 99.0
+    var q = self.bq(now)
+    var e = (now - self.t0) / 1000.0
+    var np = size(self.pg)
+    if g > 0
+      e = 9.0
+    elif vt >= 4.5 && q < 0 && np > 1 && (self.cf == 0 || now - self.cf > 5500)   # pages in turn, the score 6 s each time (win celebration first)
+      var r = (now - self.t0) % (6000 + 4000 * (np - 1))
+      if r >= 6000
+        self.page(self.pg[1 + (r - 6000) / 4000], (r - 6000) % 4000, now)
+        return
+      end
+      e = r / 1000.0
+    end
+    var kc = g > 0 ? self.kc[g - 1] : 0
+    if g > 0
+      if t < 0.12 clear(self.col(0xFFFFFF, (my ? 0.8 : 0.3) * (1 - t / 0.12)))
+      elif t < 0.7 clear(self.col(kc, 0.3 * (0.7 - t) / 0.58))
+      end
+    end
+
+    # a shine sweeps diagonally across kits and score every 4.5 s
+    var ph = (now % 4500) / 1600.0
+    var sw = ph < 1 ? int(ph * 74) - 4 : -99
+    var u = self.ez(e / 0.55)                    # kits fly in from the sides
+    var k = self.kh
+    for sd : 0 .. 1
+      var o = sd == 0 ? -int(17 * (1 - u)) : 36 + int(17 * (1 - u))
+      var dy = 0
+      if g == sd + 1 && t < 2.2 dy = -int(math.abs(math.sin(t * 9.0)) * 3 * (1 - t / 2.2) + 0.5) end
+      self.kd(k, o, dy, self.lose == sd + 1, sw)
+      var nr = self.reds[sd]                     # red cards: a small red card at the outer top of the kit
+      if nr > 0
+        for j : 0 .. (nr > 3 ? 2 : nr - 1)
+          rect_fill(sd == 0 ? o + j * 3 : o + 14 - j * 3, dy, 2, 3, 0xE81818)
+        end
+      end
+      k = self.ka
+    end
+
+    if g > 0 && t >= 0.2 && t < 3.0
+      self.tor(now, t, my, kc)
+    elif vt < 3.0
+      self.vard(vt, now)
+    elif self.st == "pre"                        # preview: kick-off time, the countdown below
+      var f = self.ez((e - 0.3) / 0.4)
+      font("small")
+      text(26 - text_ink_width(self.ptx[0]) / 2, 7, self.ptx[0], self.col(self.scol, f))
+      text(26 - text_ink_width(self.ptx[1]) / 2, 14, self.ptx[1], self.col(self.bcol, f * (0.75 + 0.25 * math.sin(now * 0.004))))
+    else
+      var f = self.ez((e - 0.3) / 0.4)          # digits fade in and slide down
+      var yo = -int(4 * (1 - f))
+      if q >= 0 && q < 8.2 yo -= 1 end        # digits move up one row while the banner is shown
+      var sc = self.col(self.scol, f)
+      var hy = yo
+      var ay = yo
+      var hc = sc
+      var ac = sc
+      var hx = 0
+      var ax = 0
+      if g > 0                                   # the new digit drops in and bounces
+        var v = (t - 3.0) / 0.45
+        var dy = v < 1 ? -int(12 * (1 - v * v)) : (v < 1.6 ? -int(math.sin((v - 1) / 0.6 * 3.1416) * 2 + 0.5) : 0)
+        var c = self.mix(kc, self.scol, clamp((t - 3.4) / 1.5, 0.0, 1.0))
+        if g == 1 hy = dy hc = c else ay = dy ac = c end
+      elif vt < 4.5                              # after VAR: the corrected digit glows red and shakes
+        var c = self.mix(0xFF3030, self.scol, (vt - 3.0) / 1.5)
+        var j = vt < 3.4 ? int(math.sin(vt * 50) * 1.5) : 0
+        if self.vf == 1 hc = c hx = j else ac = c ax = j end
+      end
+      self.paint(self.hg, self.hx + hx, hy, hc, sw)
+      self.paint(self.ag, self.ax + ax, ay, ac, sw)
+      var cc = sc                                # colon breathes while live
+      if self.st == "in" && !self.ht cc = self.col(sc, 0.35 + 0.65 * (0.5 + 0.5 * math.cos(now * 0.00314)))
+      elif self.st == "post" cc = self.col(sc, 0.5)
+      end
+      rect_fill(self.cx, 4 + yo, 2, 2, cc)
+      rect_fill(self.cx, 7 + yo, 2, 2, cc)
+    end
+
+    if self.per >= 5 && self.so != nil           # shootout: one dot per penalty scored, the newest flashes
+      for sd : 0 .. 1
+        var m = self.so[sd]
+        var pc = m > 6 ? 1 : 2
+        var pop = (now - self.sot[sd]) / 600.0
+        if m > 0
+          for j : 0 .. m - 1
+            var c = j == m - 1 && pop < 1 ? self.mix(0xFFFFFF, 0x30E030, pop) : (pc == 1 && j % 2 ? 0x20A020 : 0x30E030)
+            rect_fill(sd == 0 ? 24 - j * pc : 27 + j * pc, 13, 1, 2, c)
+          end
+        end
+      end
+    elif self.st != "pre"
+      # match bar fills on entry, its tip pulses while live, breathes at half-time
+      var bf = int(self.fill * self.ez((e - 0.45) / 0.5))
+      rect_fill(15, 14, 22, 1, 0x282828)
+      if bf > 0
+        var bc = self.bc
+        if self.ht bc = self.col(bc, 0.45 + 0.55 * (0.5 + 0.5 * math.sin(now * 0.004))) end
+        rect_fill(15, 14, bf, 1, bc)
+        if self.st == "in" && !self.ht
+          var p = 0.5 + 0.5 * math.sin(now * 0.008)
+          pixel(14 + bf, 14, self.mix(bc, 0xFFFFFF, p))
+          pixel(14 + bf, 13, self.col(bc, 0.35 * p))
+          pixel(14 + bf, 15, self.col(bc, 0.35 * p))
+        end
+      end
+    end
+
+    if g > 0 && my self.fx(t, g) end
+    if self.cf > 0 && now > self.cf self.fx((now - self.cf) / 1000.0, 0) end
+    if q >= 0 self.band(q, now) end
+  end
+
+  def on_button(btn)
+    if btn == "select"
+      self.ticks = 0                             # refresh now, the press still passes on
+      if !self.show self.tq = 0 end
+      return nil
+    end
+    if self.brw[1] return self.step(btn) end
+  end
+
+  def on_knob(e)
+    if self.brw[0] return self.step(e) end
+    return false
+  end
+
+  # browse goals and cards: the latest first, left goes back, right forward
+  def step(d)
+    var n = size(self.evl)
+    if n == 0 || self.flash > 0 || (d != "left" && d != "right") return false end
+    if self.bi < 0 self.bi = n end
+    self.bi = clamp(self.bi + (d == "left" ? -1 : 1), 0, n - 1)
+    self.banner(self.evl[self.bi])
+    return true
+  end
+end
+
+return LiveScore()
