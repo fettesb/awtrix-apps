@@ -1,6 +1,6 @@
 # Beautiful Weather for AWTRIX NG (Ulanzi TC002)
 
-**Version 2.8** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
+**Version 3.0** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
 
 ![Beautiful Weather on the Ulanzi TC002](images/1-uebersicht.gif)
 
@@ -94,10 +94,14 @@ All texts on the panel are available in **English and German** (setting *Languag
 
 ![Moon page](images/6-mond.gif)
 
-- **Moon phase** as a large **16×16 pixel-art moon**, with a separate picture for each of the eight phases. The phase is calculated on the clock from the true angle between moon and sun, so the lit share matches what your phone or an almanac shows; new and full moon are only shown within about half a day of the event, so a young crescent never looks like a new moon.
+The whole lunar cycle, sped up – the moon picture matches the lit share to the percent:
+
+![Lunar cycle](images/9-mondzyklus.gif)
+
+- **Moon phase** as a large **16×16 pixel-art moon** that matches the lit share to the percent: the clock computes the picture itself, with a soft shadow line that moves from a thin crescent over the half moon to the full moon – no jumps between a few fixed pictures. The phase is calculated on the clock from the true angle between moon and sun, so the lit share matches what your phone or an almanac shows. South of the equator the moon is shown mirrored, as you see it there.
 - **Moonrise and moonset are calculated on the clock** with a lunar theory accurate to about a minute, with no extra request. The first rise and set from today 0:00 on are shown, or tomorrow's if there is none today.
 - **Lit share in %**: every 4 s the rise/set times cross-fade to the illuminated part of the moon in big digits. Below it a **lunar cycle line** runs from new moon (left) over full moon (middle) to the next new moon (right); a pulsing dot marks today, so you also see whether the moon is waxing or waning.
-- A soft gleam runs across the lit side. At new moon the moon shows its own picture brightened into a cool grey, so you still see a faint moon with its surface in the dark.
+- A soft gleam runs across the lit side. The dark side glows faintly in a cool grey with its surface texture (earthshine), so you always see the whole moon disc, even at new moon.
 
 ## Requirements
 
@@ -197,7 +201,7 @@ This is a test release. Useful feedback:
 
 ## Credits
 
-- Moon pictures: the eight 16×16 moon phase icons by **LeonCB** on the AWTRIX Hub ([full-moon](https://awtrix.de/icons/full-moon) and the other phases), embedded in the script.
+- Moon pictures: the 16×16 moon icons by **LeonCB** on the AWTRIX Hub ([full-moon](https://awtrix.de/icons/full-moon) and [new-moon](https://awtrix.de/icons/new-moon)), embedded in the script; every phase in between is computed from them.
 - Cloud style: after LeonCB's [rainy](https://awtrix.de/icons/rainy-2) icon on the AWTRIX Hub.
 - Weather data: [Open-Meteo](https://open-meteo.com) (CC BY 4.0).
 - Moonrise/moonset: low-precision lunar theory after Montenbruck & Pfleger, *Astronomy on the Personal Computer*.
@@ -216,6 +220,8 @@ This is a test release. Useful feedback:
 
 ## Changelog
 
+- **3.0** – Moon: the picture now matches the lit share to the percent. Before, eight fixed pictures were used, so at about 40 % the clock still showed a thin 15 % crescent. The clock now computes the moon for every percent from LeonCB's full and new moon, with a soft shadow line; mirrored south of the equator. The script is about 10 KB smaller.
+- **2.9** – Moon: the dark side is now visible in every phase. It was too dark for the LEDs, so on the clock only the lit part showed, a thin crescent without its disc. It now glows faintly in the same cool grey as the new moon, the lit part stays as it is.
 - **2.8** – Moon: the lit share now includes how far the moon stands above or below the sun's path. Around new moon it was up to about half a point too low (0 % instead of 1 %).
 - **2.7** – New moon: the moon now glows faintly in a cool grey with its surface texture. Before, with *Moon dark side* at 0 %, no LED lit at new moon. The *Moon dark side* setting is gone, the other phases show their pictures as they are.
 - **2.6** – The temperature shows its unit (`11°C`, `52°F`) when it stands on its own, i.e. with humidity `off` or `alternate`, idea by jankete.
@@ -229,4 +235,4 @@ This is a test release. Useful feedback:
 
 ## License
 
-[CC BY-NC 4.0](../LICENSE) – free to use, share and modify with credit to **Hank_the_Tank**, not for commercial use. The license covers the code; the moon phase pictures are by **LeonCB** (see *Credits*) and remain his work.
+[CC BY-NC 4.0](../LICENSE) – free to use, share and modify with credit to **Hank_the_Tank**, not for commercial use. The license covers the code; the moon pictures are by **LeonCB** (see *Credits*) and remain his work.
