@@ -1,12 +1,14 @@
 # LiveScore for AWTRIX NG (Ulanzi TC002)
 
-**Version 2.7** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
+**Version 2.8** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
 
 ![LiveScore on the Ulanzi TC002](images/cover.gif)
 
 **Install from the AWTRIX Hub:** [https://awtrix.de/script/q3feTbek0lRu](https://awtrix.de/script/q3feTbek0lRu)
 
 The live score of **your favourite football team**, with both teams' kits on either side and a bar that fills up with the match time. Every goal gets a celebration: fireworks, confetti and a stadium jingle. The referee's whistle marks kick-off, half-time and full time. The data comes from ESPN's public scoreboard API, so you don't need an API key or an account.
+
+**New in 2.8: wear the kits the community designs.** Every team can wear a 16×16 kit image instead of the drawn kit: your own design, or one shared by other fans on the AWTRIX Hub. Name it `kit-<ESPN ID>` and it shows up automatically, for your team *and* for your opponents. See *Kits by the community* below.
 
 The app **only joins the rotation around your team's matches**: a preview before kick-off, the live match, and the final score with stats, league position and the next fixture. On all other days it stays out of the way, or, if you like, shows your league position.
 
@@ -21,10 +23,11 @@ The app **only joins the rotation around your team's matches**: a preview before
 
 ## Features
 
+- **Kits by the community (new in 2.8).** Any 16×16 kit icon on your clock named `kit-<ESPN ID>` (e.g. `kit-132` for Bayern) is worn automatically by that team, whether it is yours or the opponent. Want a different design for your team? Type any icon name into *Kit image*. Draw your own in the Hub Studio and share it, so every fan of your club can wear it.
 - **All competitions.** League, cups and European games. The app skips its turn in the rotation until shortly before kick-off.
 - **Preview before kick-off.** Up to an hour before (adjustable), both kits fly in with the kick-off time in your local time and a countdown (`in 42'`, then `4:59` in the last ten minutes).
 - **Two teams.** Follow your club and your national team, for example, each with its own kit settings. The app shows whichever match comes first.
-- **Both kits.** Home left, away right. The opponent wears its ESPN colours; your team uses its ESPN colours or your own colours with one of 12 patterns (stripes, hoops, sash, halves, chevron, fade …). Colours too dark for the LEDs are lightened.
+- **Both kits.** Home left, away right. Every team wears its `kit-<ESPN ID>` icon if it is on your clock (see *Kits by the community*). Otherwise the kit is drawn: the opponent in its ESPN colours, your team in its ESPN colours or your own colours with one of 12 patterns (stripes, hoops, sash, halves, chevron, fade …). Colours too dark for the LEDs are lightened.
 - **Big score and match time bar.** 6×10 px block digits (narrower for double digits). The bar is green while the match is on, amber at half-time, orange in extra time and grey after the final whistle.
 - **Animated.** The kits fly in, the score drops into place, a shine sweeps across, and the colon and the tip of the bar pulse while the match is live.
 - **Goal celebration for your team.** A flash, your kit jumps, a rainbow **GOAL!** pops in letter by letter, three fireworks burst in your colours, confetti falls, and the new digit bounces in while a synthesized stadium jingle plays. A goal for the opponent gets a dimmed *GOAL* and a sad trombone.
@@ -33,7 +36,7 @@ The app **only joins the rotation around your team's matches**: a preview before
 - **Browse the match.** While the app is on screen, turn the knob (or press left/right) to replay every goal and card as a banner, the latest first.
 - **Penalty shootout.** Every penalty scored adds a green dot under the score. ESPN does not list misses, so only goals are shown.
 - **Half-time stats.** The app alternates between the score and a page with possession (a bar in both teams' colours) and shots.
-- **Final score.** It stays in the rotation for 15 minutes. A win brings confetti in your club colours and a victory fanfare; the losing kit turns grey. The app cycles through the score, the stats, your **league position** with its change (`Rank 3 ▲2` · `27 points`, leagues only) and your **next match** (`Sat 15:30` · `@ Mainz`).
+- **Final score.** It stays in the rotation for 15 minutes. A win brings confetti in your club colours and a victory fanfare; the losing kit turns grey (a kit image stays as it is). The app cycles through the score, the stats, your **league position** with its change (`Rank 3 ▲2` · `27 points`, leagues only) and your **next match** (`Sat 15:30` · `@ Mainz`).
 - **Referee whistles.** One at kick-off and after the break, two at half-time, three at full time.
 - **Goal announcement.** After the jingle, the clock calls out *"Goal! Goal! Goal! Dortmund!"* (or *"No goal!"* after VAR). With *Language* set to `Deutsch` and a German voice pack on the clock, it calls *"Tor! Tor! Tor! Osnabrück!"* and uses German names where ESPN has English ones (Cologne → Köln, Netherlands → Niederlande). For any other voice pack, type your own calls, e.g. *"Doelpunt! {team}!"* in Dutch. Voice packs are available in [Blueforcer's shop](https://ko-fi.com/blueforcer/shop).
 - **League position between matches (optional).** Without a match the app stays in the rotation with your kit or club crest, your position in big digits with an arrow for the change since the last matchday (`10. ▲2`) and your points. During the preview before kick-off it alternates with the countdown. Switch it off and the app disappears again until the next match.
@@ -45,7 +48,7 @@ The app **only joins the rotation around your team's matches**: a preview before
 
 - An **Ulanzi TC002** running **AWTRIX NG** **firmware 1.1.6 or newer** (tested on 1.2.3). On older firmware the display works, but sounds and the announcement may stay silent.
 - A **52×16** display. The layout is not meant for 32×8 clocks.
-- No icons are needed. Kits and digits are drawn in code.
+- No icons are needed. Kits and digits are drawn in code; kit icons (`kit-<ESPN ID>`) are optional.
 
 ## Installation
 
@@ -70,13 +73,7 @@ New versions are announced on the clock itself once your Hub account is connecte
 
 ### Manual installation
 
-Only if you can't use the button:
-
-1. Open the AWTRIX web interface and go to the **Scripts** tab.
-2. Create a new script called **`LiveScore`**, paste the contents of [`LiveScore.ax`](LiveScore.ax) and press **Save**.
-3. Set your team's ESPN ID as described above.
-
-If the panel shows a red **`ERR:`**, the error message is shown next to the script in the Scripts tab. Please include it in your feedback.
+Only if you can't use the button: in the AWTRIX web interface open the **Scripts** tab, create a script called **`LiveScore`**, paste the contents of [`LiveScore.ax`](LiveScore.ax) and press **Save**.
 
 ### Finding your team's ESPN ID
 
@@ -94,8 +91,9 @@ All settings are behind the gear on the *LiveScore* row of the **Apps** tab, in 
 |---|---|---|
 | **ESPN team ID** | 132 (Bayern Munich) | Your team. **Set this first.** |
 | **Kit colour / trim / pattern** | red / white / plain | Your own kit, used when *ESPN colours* is off. Patterns: `plain`, `stripes`, `hoops`, `checker`, `sash`, `halves`, `quarters`, `band`, `center`, `sleeves`, `chevron`, `fade` |
-| **ESPN colours for my team** | on | Off: use your own colours, e.g. when ESPN has none for your club |
-| **Second team** + kit settings | empty | Optional second team (e.g. your national team) with its own kit |
+| **ESPN colours for my team** | on | For the drawn kit, i.e. when your team wears no kit image. Off: use your own colours, e.g. when ESPN has none for your club |
+| **Kit image (my team)** | empty | Name of a 16×16 icon on your clock (without `.gif`), worn instead of the drawn kit. **Empty = automatic:** the icon `kit-<ESPN ID>` if it is on the clock, otherwise the drawn kit in ESPN colours or your own colours. See *Kits by the community* |
+| **Second team** + kit settings | empty | Optional second team (e.g. your national team) with its own kit and its own *Kit image* |
 | **Update during the match** | 30 s | How often the score is checked (15–300 s) |
 | **Show final score** | 15 min | How long the result stays. `0` hides the app right away |
 | **Preview before kick-off** | 60 min | When the kits and countdown appear. `0` = from kick-off |
@@ -113,6 +111,27 @@ All settings are behind the gear on the *LiveScore* row of the **Apps** tab, in 
 | **Score / Match time bar** | white / green | Colours of the digits and the bar |
 | **Background** | grass | `black`, `navy`, `anthracite`, `grass`, `bordeaux` or `petrol` gradient |
 | **MQTT topic** | empty | Optional, see *MQTT and Home Assistant* |
+
+## Kits by the community
+
+LiveScore draws every kit itself, but it looks much better in a real design. Since 2.8 a team can wear a **16×16 kit image**, and the AWTRIX Hub is the wardrobe: the more fans share their kits, the more teams look right on every clock.
+
+### Wear a kit
+
+- **Automatically:** install an icon called **`kit-<ESPN ID>`** on your clock, e.g. `kit-132` (Bayern Munich) or `kit-481` (Germany). That team wears it in every match, whether it is your team or the opponent. On the icon's Hub page press **Send to AWTRIX**. Nothing to set.
+- **Your pick for your own teams:** type any icon name into **Kit image (my team)** or **Kit image (team 2)**, e.g. a retro design or a third kit. This wins over `kit-<ID>`. Press **Copy name** on the Hub page to get the name exactly right.
+- No icon? The drawn kit is used as before, in ESPN colours or your own colours.
+- **An empty *Kit image* does not mean ESPN colours.** It means automatic: a `kit-<ESPN ID>` icon on the clock always wins over the drawn kit. To see the drawn kit again, delete that icon from the clock (icon gallery in the AWTRIX web interface).
+
+### Design and share a kit
+
+1. **Start from the template:** open the [kit template](https://awtrix.de/icons/kit-template) on the Hub and press **Make a variation** (you need to be signed in). It opens the 16×16 kit shape in the Studio. Paint inside the grey area: anything outside the shape is cut off, so all kits line up, and the area around the kit is replaced by the app's background.
+2. **Share it:** name it **`kit-<ESPN ID>`** (e.g. `kit-132`) and check that **Copy name** on its page shows exactly that name. Then every LiveScore user who installs it gets it automatically. The ESPN ID is explained under *Finding your team's ESPN ID*.
+3. Names on the Hub are unique, so a second design for the same club gets a suffix (`kit-132-2`). Those are worn through the *Kit image* setting. Mention new kits in the LiveScore discussion so others find them.
+
+- A kit image flies in, jumps when its team scores and carries its red cards like the drawn kit. It stays as it is when its team loses, and the shine sweep leaves it alone.
+- Sparks, the new digit after a goal and the stats bar use the team's **kit colours**: ESPN's for the opponent, your *Kit colour* / *Kit trim* (or ESPN's) for your team. For your own teams, set them to the main colours of your design.
+- Kit images cost no network traffic: the app only looks for the icon on the clock.
 
 ## Good to know
 
@@ -217,6 +236,7 @@ Messages are sent whether or not LiveScore is on screen, also during quiet hours
 
 ## Changelog
 
+- **2.8** – **Kits by the community:** a 16×16 icon named `kit-<ESPN ID>` on the clock is worn automatically by that team, also by the opponent. New *Kit image* setting per team for any other icon. Share your kit designs as icons on the AWTRIX Hub.
 - **2.7** – Custom goal and no-goal calls, so the announcement works with voice packs in any language (thanks to goldstrike053 for the idea). The display keeps its own *Language*.
 - **2.6** – Preview with kick-off time and countdown. VAR animation. Penalty shootout dots. Half-time stats. After full time: confetti and fanfare for a win, grey loser kit, league position, next match. Red cards stay on the kit. Browse goals and cards with the knob or buttons. Second team, quiet hours, MQTT events, *Language* setting (English/German). Optional league position between matches. The background gradient is gentler, so the bottom rows no longer go dark. Two goals or several cards between two updates are no longer lost. Fixes: the opponent's name could be "Goals" before kick-off; club names without umlauts (Osnabruck, Koln …) are now shown and announced correctly, and in German English club and country names are replaced (Cologne → Köln).
 - **2.5** – Taller goal and card banners, so descenders in player names are no longer cut off.

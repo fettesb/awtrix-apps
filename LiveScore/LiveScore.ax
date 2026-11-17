@@ -1,18 +1,20 @@
 # @name    LiveScore
 # @desc    Live football score of your favourite team (ESPN) with both team kits, goal fireworks, jingle and referee whistles - only in the rotation while the match is on (52x16, Ulanzi TC002)
 # @author  Hank_the_Tank / Claude
-# @version 2.7
+# @version 2.8
 # @display 52x16
 # @config  team     text   "ESPN team ID"              default="132" maxlen=8 group="My Team" help="The number in espn.com/soccer/club/_/id/<ID>/... - 132 = Bayern Munich"
 # @config  kcol     color  "Kit colour (my team)"      default=#DC052D group="My Team"
 # @config  ktrim    color  "Kit trim (my team)"        default=#FFFFFF group="My Team"
 # @config  kpat     select "Kit pattern (my team)"     default=plain group="My Team" options=plain,stripes,hoops,checker,sash,halves,quarters,band,center,sleeves,chevron,fade
-# @config  ecol     bool   "ESPN colours for my team"  default=true group="My Team" help="On: kit colours from ESPN. Off: the two colours above"
+# @config  ecol     bool   "ESPN colours for my team"  default=true group="My Team" help="For the drawn kit, when no kit image is shown. On: ESPN colours. Off: the two colours above"
+# @config  kimg     text   "Kit image (my team)"       maxlen=32 group="My Team" help="Empty = automatic: icon kit-<ID> if it is on the clock, else the drawn kit (colours above)"
 # @config  team2    text   "Second team (ESPN ID)"     maxlen=8 group="Team 2" hint=481 help="Optional, e.g. your club and your national team. Empty = one team only"
 # @config  kcol2    color  "Kit colour (team 2)"       default=#FFFFFF group="Team 2"
 # @config  ktrim2   color  "Kit trim (team 2)"         default=#000000 group="Team 2"
 # @config  kpat2    select "Kit pattern (team 2)"      default=plain group="Team 2" options=plain,stripes,hoops,checker,sash,halves,quarters,band,center,sleeves,chevron,fade
-# @config  ecol2    bool   "ESPN colours for team 2"   default=true group="Team 2" help="On: kit colours from ESPN. Off: the two colours above"
+# @config  ecol2    bool   "ESPN colours for team 2"   default=true group="Team 2" help="For the drawn kit, when no kit image is shown. On: ESPN colours. Off: the two colours above"
+# @config  kimg2    text   "Kit image (team 2)"        maxlen=32 group="Team 2" help="Empty = automatic: icon kit-<ID> if it is on the clock, else the drawn kit (colours above)"
 # @config  every    number "Update during the match" default=30 min=15 max=300 unit=s group="Settings"
 # @config  post     number "Show final score"         default=15 min=0 max=120 unit=min group="Settings"
 # @config  pre      number "Preview before kick-off"  default=60 min=0 max=240 unit=min group="Settings" help="This long before the match: both kits with kick-off time and countdown. 0 = from kick-off"
@@ -49,24 +51,29 @@ class LiveScore
   var t0, gm, kc, tl, rnd, pend, wh, sj, ss, sv, fan, wd # animation and sound
   var so, sot, stx, rk0, tbx, rq, nx, lose, res, cf, vf, vt, ptx, pg, tz   # 2.6: shootout, stats, table, VAR, preview
   var de, tab0, tb0, kid, tq, crest, curl      # league position between matches
+  var imgs, img, ih, ia, fl                     # 2.8: custom kit images, background during the goal flash
 
   def init()
     # up to two teams, each with its own kit settings
     self.tids = []
     self.mines = []
     self.ecols = []
+    self.imgs = []
     for k : ["", "2"]
       var m = re.search("\\d+", str(store.get("team" + k)))
       if m != nil && self.tids.find(m[0]) == nil
         self.tids.push(m[0])
         self.mines.push([store.get("kcol" + k), store.get("ktrim" + k), store.get("kpat" + k)])
         self.ecols.push(store.get("ecol" + k))
+        var im = self.iname(store.get("kimg" + k))
+        self.imgs.push(im == nil ? "kit-" + m[0] : im)   # empty: icon kit-<ID>, if it is on the clock
       end
     end
     if size(self.tids) == 0
       self.tids.push("0")
       self.mines.push([0xFFFFFF, 0, "plain"])
       self.ecols.push(true)
+      self.imgs.push(nil)
     end
     self.ti = 0
     self.pick(0)
@@ -144,6 +151,9 @@ class LiveScore
     self.hid = ["", ""]
     self.kh = nil
     self.ka = nil
+    self.ih = nil
+    self.ia = nil
+    self.fl = nil
     self.fill = 0
     self.bc = 0
     self.flash = 0
@@ -246,6 +256,14 @@ class LiveScore
     self.tid = self.tids[k]
     self.mine = self.mines[k]
     self.ecol = self.ecols[k]
+    self.img = self.imgs[k]
+  end
+
+  # icon name from the setting: spaces and ".gif" removed, empty = nil
+  def iname(v)
+    var m = re.search("^ *([^ ]+?)(\\.[gG][iI][fF])? *$", v == nil ? "" : str(v))
+    if m == nil return nil end
+    return string.find(m[0], "/") < 0 ? m[1] : m[0]   # a web address (TC002) stays whole
   end
 
   # Easter egg: Germany (ESPN id 481) as your own team wears the 1990 World Cup kit,
@@ -540,6 +558,9 @@ class LiveScore
       var mk = self.tid == "481" ? self.ger() : (self.ecol ? self.kit(col[mi], col[mi + 1], M[2]) : self.kit(M[0], M[1], M[2]))
       self.kh = mh ? mk : ok
       self.ka = mh ? ok : mk
+      var oim = "kit-" + R[mh ? 1 : 0][0]        # opponent: icon kit-<ID>, if it is on the clock
+      self.ih = mh ? self.img : oim
+      self.ia = mh ? oim : self.img
       self.mh = mh
       self.tn = nn
       self.nh = self.ansage(nn[0])
@@ -1139,7 +1160,7 @@ class LiveScore
     var ph = (now % 4500) / 1600.0
     var o = -int(17 * (1 - self.ez(e / 0.55)))   # kit or crest flies in from the left
     if !self.crest || self.curl == nil || !icon(self.curl, o, 0)   # kit until the crest has loaded
-      self.kd(self.kid, o, 0, false, ph < 1 ? int(ph * 74) - 4 : -99)
+      self.kdi(self.kid, self.imgs[0], o, 0, false, ph < 1 ? int(ph * 74) - 4 : -99)
     end
     var T = self.tb0
     var ox = int(36 * (1 - self.ez((e - 0.25) / 0.4)) + 0.5)   # the text slides in from the right
@@ -1249,6 +1270,27 @@ class LiveScore
           pixel(o + x, y + dy, c)
         end
         i += 1
+      end
+    end
+  end
+
+  # kit image (16x16 icon) instead of the drawn kit; if the icon is missing, the drawn one.
+  # The clock paints transparent pixels black, so outside the kit shape the background is
+  # restored. An image stays as it is for the losing team too
+  def kdi(k, im, o, dy, dm, sw)
+    if im == nil || !icon(im, o, dy)
+      self.kd(k, o, dy, dm, sw)
+      return
+    end
+    var s = self.sh
+    for y : 0 .. 15
+      var r = y + dy
+      if r < 0 continue end
+      var j = y < 6 ? y * 2 : 12
+      var c = self.fl != nil ? self.fl : (self.bgg == nil ? 0 : self.bgg[r])
+      if s[j] > 0
+        rect_fill(o, r, s[j], 1, c)
+        rect_fill(o + s[j + 1] + 1, r, 15 - s[j + 1], 1, c)
       end
     end
   end
@@ -1404,7 +1446,7 @@ class LiveScore
       text(26 - text_ink_width(T[1]) / 2 + ox, 14, T[1], 0xA0A0A0)
       return
     end
-    self.kd(self.mh ? self.kh : self.ka, ox, 0, false, -99)   # my kit on the left, the text on the right
+    self.kdi(self.mh ? self.kh : self.ka, self.img, ox, 0, false, -99)   # my kit on the left, the text on the right
     var N = self.nx                              # next match: day and time, opponent
     text(34 - text_ink_width(N[0]) / 2 + ox, 7, N[0], self.scol)
     var w = text_ink_width(N[1])
@@ -1417,6 +1459,7 @@ class LiveScore
 
   def draw()
     clear()
+    self.fl = nil
     if self.bgg != nil
       for y : 0 .. 15 rect_fill(0, y, 52, 1, self.bgg[y]) end
     end
@@ -1452,9 +1495,10 @@ class LiveScore
     end
     var kc = g > 0 ? self.kc[g - 1] : 0
     if g > 0
-      if t < 0.12 clear(self.col(0xFFFFFF, (my ? 0.8 : 0.3) * (1 - t / 0.12)))
-      elif t < 0.7 clear(self.col(kc, 0.3 * (0.7 - t) / 0.58))
+      if t < 0.12 self.fl = self.col(0xFFFFFF, (my ? 0.8 : 0.3) * (1 - t / 0.12))
+      elif t < 0.7 self.fl = self.col(kc, 0.3 * (0.7 - t) / 0.58)
       end
+      if self.fl != nil clear(self.fl) end
     end
 
     # a shine sweeps diagonally across kits and score every 4.5 s
@@ -1462,11 +1506,12 @@ class LiveScore
     var sw = ph < 1 ? int(ph * 74) - 4 : -99
     var u = self.ez(e / 0.55)                    # kits fly in from the sides
     var k = self.kh
+    var im = self.ih
     for sd : 0 .. 1
       var o = sd == 0 ? -int(17 * (1 - u)) : 36 + int(17 * (1 - u))
       var dy = 0
       if g == sd + 1 && t < 2.2 dy = -int(math.abs(math.sin(t * 9.0)) * 3 * (1 - t / 2.2) + 0.5) end
-      self.kd(k, o, dy, self.lose == sd + 1, sw)
+      self.kdi(k, im, o, dy, self.lose == sd + 1, sw)
       var nr = self.reds[sd]                     # red cards: a small red card at the outer top of the kit
       if nr > 0
         for j : 0 .. (nr > 3 ? 2 : nr - 1)
@@ -1474,6 +1519,7 @@ class LiveScore
         end
       end
       k = self.ka
+      im = self.ia
     end
 
     if g > 0 && t >= 0.2 && t < 3.0

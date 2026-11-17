@@ -8,7 +8,7 @@ The easiest way to install them is the **Send to AWTRIX** button on each app's A
 |---|---|---|---|
 | [Beautiful Weather](BeautifulWeather/) | 3.0 | Animated weather symbols with pages for rain, wind, 3-day forecast, sun and moon (Open-Meteo, no key) | [Install](https://awtrix.de/script/O3xYAw5TPWWp) |
 | [Sunrise Alarm](SunriseAlarm/) | 1.6 | Alarm clock with a silent sunrise, red night clock, two schedules and snooze | [Install](https://awtrix.de/script/xtRmQ4UuyR5r) |
-| [LiveScore](LiveScore/) | 2.7 | Live football score of your team (ESPN) with kits, goal fireworks, jingle and referee whistles | [Install](https://awtrix.de/script/q3feTbek0lRu) |
+| [LiveScore](LiveScore/) | 2.8 | Live football score of your team (ESPN) with community kits, goal fireworks, jingle and referee whistles | [Install](https://awtrix.de/script/q3feTbek0lRu) |
 
 ## License
 
