@@ -1,20 +1,20 @@
 # @name    LiveScore
 # @desc    Live football score of your favourite team (ESPN) with both team kits, goal fireworks, jingle and referee whistles - only in the rotation while the match is on (52x16, Ulanzi TC002)
 # @author  Hank_the_Tank / Claude
-# @version 2.8
+# @version 2.9
 # @display 52x16
 # @config  team     text   "ESPN team ID"              default="132" maxlen=8 group="My Team" help="The number in espn.com/soccer/club/_/id/<ID>/... - 132 = Bayern Munich"
 # @config  kcol     color  "Kit colour (my team)"      default=#DC052D group="My Team"
 # @config  ktrim    color  "Kit trim (my team)"        default=#FFFFFF group="My Team"
 # @config  kpat     select "Kit pattern (my team)"     default=plain group="My Team" options=plain,stripes,hoops,checker,sash,halves,quarters,band,center,sleeves,chevron,fade
 # @config  ecol     bool   "ESPN colours for my team"  default=true group="My Team" help="For the drawn kit, when no kit image is shown. On: ESPN colours. Off: the two colours above"
-# @config  kimg     text   "Kit image (my team)"       maxlen=32 group="My Team" help="Empty = automatic: icon kit-<ID> if it is on the clock, else the drawn kit (colours above)"
+# @config  kimg     text   "Kit image (my team)"       maxlen=32 group="My Team" help="Empty = automatic: kit-<ID>, for away games kit-<ID>-away first. No icon: the drawn kit"
 # @config  team2    text   "Second team (ESPN ID)"     maxlen=8 group="Team 2" hint=481 help="Optional, e.g. your club and your national team. Empty = one team only"
 # @config  kcol2    color  "Kit colour (team 2)"       default=#FFFFFF group="Team 2"
 # @config  ktrim2   color  "Kit trim (team 2)"         default=#000000 group="Team 2"
 # @config  kpat2    select "Kit pattern (team 2)"      default=plain group="Team 2" options=plain,stripes,hoops,checker,sash,halves,quarters,band,center,sleeves,chevron,fade
 # @config  ecol2    bool   "ESPN colours for team 2"   default=true group="Team 2" help="For the drawn kit, when no kit image is shown. On: ESPN colours. Off: the two colours above"
-# @config  kimg2    text   "Kit image (team 2)"        maxlen=32 group="Team 2" help="Empty = automatic: icon kit-<ID> if it is on the clock, else the drawn kit (colours above)"
+# @config  kimg2    text   "Kit image (team 2)"        maxlen=32 group="Team 2" help="Empty = automatic: kit-<ID>, for away games kit-<ID>-away first. No icon: the drawn kit"
 # @config  every    number "Update during the match" default=30 min=15 max=300 unit=s group="Settings"
 # @config  post     number "Show final score"         default=15 min=0 max=120 unit=min group="Settings"
 # @config  pre      number "Preview before kick-off"  default=60 min=0 max=240 unit=min group="Settings" help="This long before the match: both kits with kick-off time and countdown. 0 = from kick-off"
@@ -66,7 +66,7 @@ class LiveScore
         self.mines.push([store.get("kcol" + k), store.get("ktrim" + k), store.get("kpat" + k)])
         self.ecols.push(store.get("ecol" + k))
         var im = self.iname(store.get("kimg" + k))
-        self.imgs.push(im == nil ? "kit-" + m[0] : im)   # empty: icon kit-<ID>, if it is on the clock
+        self.imgs.push(im)                       # nil = automatic (kit-<ID>)
       end
     end
     if size(self.tids) == 0
@@ -264,6 +264,13 @@ class LiveScore
     var m = re.search("^ *([^ ]+?)(\\.[gG][iI][fF])? *$", v == nil ? "" : str(v))
     if m == nil return nil end
     return string.find(m[0], "/") < 0 ? m[1] : m[0]   # a web address (TC002) stays whole
+  end
+
+  # kit images to try, the first one on the clock wins: your pick, else kit-<ID>,
+  # for away games kit-<ID>-away first (home and away kits from the community)
+  def kn(id, im, aw)
+    if im != nil return [im] end
+    return aw ? ["kit-" + id + "-away", "kit-" + id] : ["kit-" + id]
   end
 
   # Easter egg: Germany (ESPN id 481) as your own team wears the 1990 World Cup kit,
@@ -558,9 +565,8 @@ class LiveScore
       var mk = self.tid == "481" ? self.ger() : (self.ecol ? self.kit(col[mi], col[mi + 1], M[2]) : self.kit(M[0], M[1], M[2]))
       self.kh = mh ? mk : ok
       self.ka = mh ? ok : mk
-      var oim = "kit-" + R[mh ? 1 : 0][0]        # opponent: icon kit-<ID>, if it is on the clock
-      self.ih = mh ? self.img : oim
-      self.ia = mh ? oim : self.img
+      self.ih = self.kn(R[0][0], mh ? self.img : nil, false)   # home: kit-<ID>
+      self.ia = self.kn(R[1][0], mh ? nil : self.img, true)    # away: kit-<ID>-away first
       self.mh = mh
       self.tn = nn
       self.nh = self.ansage(nn[0])
@@ -1160,7 +1166,7 @@ class LiveScore
     var ph = (now % 4500) / 1600.0
     var o = -int(17 * (1 - self.ez(e / 0.55)))   # kit or crest flies in from the left
     if !self.crest || self.curl == nil || !icon(self.curl, o, 0)   # kit until the crest has loaded
-      self.kdi(self.kid, self.imgs[0], o, 0, false, ph < 1 ? int(ph * 74) - 4 : -99)
+      self.kdi(self.kid, self.kn(self.tids[0], self.imgs[0], false), o, 0, false, ph < 1 ? int(ph * 74) - 4 : -99)
     end
     var T = self.tb0
     var ox = int(36 * (1 - self.ez((e - 0.25) / 0.4)) + 0.5)   # the text slides in from the right
@@ -1277,8 +1283,14 @@ class LiveScore
   # kit image (16x16 icon) instead of the drawn kit; if the icon is missing, the drawn one.
   # The clock paints transparent pixels black, so outside the kit shape the background is
   # restored. An image stays as it is for the losing team too
-  def kdi(k, im, o, dy, dm, sw)
-    if im == nil || !icon(im, o, dy)
+  def kdi(k, L, o, dy, dm, sw)
+    var ok = false                               # L: icon names, the first one on the clock wins
+    if L != nil
+      for im : L
+        if icon(im, o, dy) ok = true break end
+      end
+    end
+    if !ok
       self.kd(k, o, dy, dm, sw)
       return
     end
@@ -1446,7 +1458,7 @@ class LiveScore
       text(26 - text_ink_width(T[1]) / 2 + ox, 14, T[1], 0xA0A0A0)
       return
     end
-    self.kdi(self.mh ? self.kh : self.ka, self.img, ox, 0, false, -99)   # my kit on the left, the text on the right
+    self.kdi(self.mh ? self.kh : self.ka, self.mh ? self.ih : self.ia, ox, 0, false, -99)   # my kit on the left, the text on the right
     var N = self.nx                              # next match: day and time, opponent
     text(34 - text_ink_width(N[0]) / 2 + ox, 7, N[0], self.scol)
     var w = text_ink_width(N[1])
