@@ -1,14 +1,14 @@
 # LiveScore for AWTRIX NG (Ulanzi TC002)
 
-**Version 2.9** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
+**Version 3.0** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
 
 ![LiveScore on the Ulanzi TC002](images/cover.gif)
 
-**Install from the AWTRIX Hub:** [https://awtrix.de/script/q3feTbek0lRu](https://awtrix.de/script/q3feTbek0lRu)
+**Install from the AWTRIX Hub:** [https://awtrix.de/script/q3feTbek0lRu](https://awtrix.de/script/q3feTbek0lRu) (press **Send to AWTRIX**). Manual installation: in the AWTRIX web interface open the **Scripts** tab, create a script called **`LiveScore`**, paste the contents of [`LiveScore.ax`](LiveScore.ax) and press **Save**.
 
 The live score of **your favourite football team**, with both teams' kits on either side and a bar that fills up with the match time. Every goal gets a celebration: fireworks, confetti and a stadium jingle. The referee's whistle marks kick-off, half-time and full time. The data comes from ESPN's public scoreboard API, so you don't need an API key or an account.
 
-**New in 2.9: home *and* away kits from the community.** Every team can wear a 16×16 kit image from the AWTRIX Hub instead of the drawn kit: `kit-<ESPN ID>` at home, `kit-<ESPN ID>-away` away, automatically for your team *and* your opponents. See *Kits by the community*.
+**Home *and* away kits from the community.** Every team can wear a 16×16 kit image from the AWTRIX Hub instead of the drawn kit: `kit-<ESPN ID>` at home, `kit-<ESPN ID>-away` away, automatically for your team *and* your opponents. See *Kits by the community*.
 
 The app **only joins the rotation around your team's matches**: a preview before kick-off, the live match, and the final score with stats, league position and the next fixture. On all other days it stays out of the way, or, if you like, shows your league position.
 
@@ -49,32 +49,7 @@ The app **only joins the rotation around your team's matches**: a preview before
 - A **52×16** display. The layout is not meant for 32×8 clocks.
 - No icons are needed; kit icons are optional.
 
-## Installation
-
-### The easy way (recommended): Send to AWTRIX
-
-1. Open [LiveScore on the AWTRIX Hub](https://awtrix.de/script/q3feTbek0lRu).
-2. Press **Send to AWTRIX** and choose your TC002 in the next step.
-3. Done. The app is installed. It stays hidden until your team plays.
-
-### Then: make it yours
-
-Open the AWTRIX web interface (the clock's IP address or `http://awtrixng-xxxxxx.local`), go to the **Apps** tab and click the **gear** on the LiveScore row. The one thing you have to set is **your team's ESPN ID** (see below). Without it you follow Bayern Munich. There you can also add a **second team** and choose kit colours, language, quiet hours and more (see *Settings*).
-
-As long as your team isn't playing, you won't see the app. That is intended: it shows up an hour before kick-off.
-
-### Updates
-
-New versions are announced on the clock itself once your Hub account is connected:
-
-1. In the AWTRIX web interface open **System → AWTRIX Hub** and enter your **Hub connection key**. You find it in your Hub account settings (**Open Hub account**).
-2. Go to the **Scripts** tab and press **Check for updates**. Scripts with a newer version on the Hub are marked there.
-
-### Manual installation
-
-Only if you can't use the button: in the AWTRIX web interface open the **Scripts** tab, create a script called **`LiveScore`**, paste the contents of [`LiveScore.ax`](LiveScore.ax) and press **Save**.
-
-### Finding your team's ESPN ID
+## Finding your team's ESPN ID
 
 Search for your team on [espn.com](https://www.espn.com/soccer/) and open its club page. The ID is the number in the address:
 
@@ -95,7 +70,7 @@ All settings are behind the gear on the *LiveScore* row of the **Apps** tab, in 
 | **ESPN team ID** | 132 (Bayern Munich) | Your team. **Set this first.** |
 | **Kit colour / trim / pattern** | red / white / plain | Your own kit, used when *ESPN colours* is off. Patterns: `plain`, `stripes`, `hoops`, `checker`, `sash`, `halves`, `quarters`, `band`, `center`, `sleeves`, `chevron`, `fade` |
 | **ESPN colours for my team** | on | For the drawn kit, i.e. when your team wears no kit image. Off: use your own colours, e.g. when ESPN has none for your club |
-| **Kit image (my team)** | empty | Name of a 16×16 icon on your clock, worn instead of the drawn kit. **Empty = automatic**, see *Kits by the community* |
+| **Kit image (my team)** | empty | 16×16 icon on your clock instead of the drawn kit. One name for both, or two: `home, away` (e.g. `kit-481-3, kit-481-away-2`). **Empty = automatic**, see *Kits by the community* |
 | **Second team** + kit settings | empty | Optional second team (e.g. your national team) with its own kit and its own *Kit image* |
 | **Update during the match** | 30 s | How often the score is checked (15–300 s) |
 | **Show final score** | 15 min | How long the result stays. `0` hides the app right away |
@@ -124,7 +99,7 @@ LiveScore draws every kit itself, but a real design looks much better. A team ca
 - **Automatically:** install the icon **`kit-<ESPN ID>`** (e.g. `kit-132` Bayern, `kit-481` Germany) with **Send to AWTRIX** on its Hub page. That team wears it in every match, yours or the opponent. Nothing to set.
 - **Away kit (new in 2.9):** **`kit-<ESPN ID>-away`** (e.g. `kit-132-away`) is worn when that team is the away side (right). Without it, `kit-<ESPN ID>` is worn away too.
 - **Only the name counts, not the title:** the app looks for what **Copy name** shows on the Hub page (= the file name on your clock).
-- **Your pick for your own teams:** type any icon name into **Kit image (my team)** / **(team 2)**, e.g. a retro or third kit. It wins home and away.
+- **Your pick for your own teams:** type an icon name into **Kit image (my team)** / **(team 2)**, e.g. a retro kit or one with a suffix like `kit-481-3`. One name is worn home and away. **New in 3.0: two names, `home, away`**, e.g. `kit-481-3, kit-481-away-2`. Leave one side empty for automatic there: `, kit-481-away-2` picks only the away kit.
 - No icon? The drawn kit, as before. An empty *Kit image* means automatic, not ESPN colours: to get the drawn kit back, delete the `kit-…` icon from the clock (icon gallery in the web interface).
 
 ### Design and share a kit
@@ -132,7 +107,7 @@ LiveScore draws every kit itself, but a real design looks much better. A team ca
 1. Open the [kit template](https://awtrix.de/icons/kit-template) and press **Make a variation** (signed in). Paint inside the grey area; anything outside is cut off and replaced by the app's background.
 2. Give it the title **`kit-<ESPN ID>`** (home) or **`kit-<ESPN ID>-away`** (away), nothing more. Check the ID first (see *Finding your team's ESPN ID*), and after uploading check that **Copy name** shows exactly that name.
 3. **The name is fixed at the first upload**, made from the title you typed. Renaming the title later doesn't change it; a wrong name needs a new upload.
-4. Names are unique, so a second design gets a suffix (`kit-132-2`), worn through *Kit image*. Mention new kits in the LiveScore discussion.
+4. Names are unique, so a second design gets a suffix (`kit-132-2`), worn through *Kit image* (home, away or both). Mention new kits in the LiveScore discussion.
 
 A kit image flies in, jumps for goals and carries red cards like the drawn kit, and stays as it is when its team loses. Sparks and the stats bar use the **kit colours** (for your teams: set *Kit colour* / *Kit trim* to your design's colours). No network traffic: the icon is on the clock.
 
@@ -239,6 +214,7 @@ Messages are sent whether or not LiveScore is on screen, also during quiet hours
 
 ## Changelog
 
+- **3.0** – *Kit image* takes two names, `home, away`, so suffixed icons like `kit-481-3` work without renaming.
 - **2.9** – **Away kits:** the away team wears `kit-<ESPN ID>-away` if it is on the clock, otherwise `kit-<ESPN ID>`. Clearer help on kit names and ESPN IDs.
 - **2.8** – **Kits by the community:** a 16×16 icon named `kit-<ESPN ID>` on the clock is worn automatically by that team, also by the opponent. New *Kit image* setting per team for any other icon. Share your kit designs as icons on the AWTRIX Hub.
 - **2.7** – Custom goal and no-goal calls, so the announcement works with voice packs in any language (thanks to goldstrike053 for the idea). The display keeps its own *Language*.
