@@ -1,7 +1,7 @@
 # @name    LiveScore
 # @desc    Live football score of your favourite team (ESPN) with both team kits, goal fireworks, jingle and referee whistles - only in the rotation while the match is on (52x16, Ulanzi TC002)
 # @author  Hank_the_Tank / Claude
-# @version 3.0
+# @version 3.1
 # @display 52x16
 # @config  team     text   "ESPN team ID"              default="132" maxlen=8 group="My Team" help="The number in espn.com/soccer/club/_/id/<ID>/... - 132 = Bayern Munich"
 # @config  kcol     color  "Kit colour (my team)"      default=#DC052D group="My Team"
@@ -52,6 +52,7 @@ class LiveScore
   var so, sot, stx, rk0, tbx, rq, nx, lose, res, cf, vf, vt, ptx, pg, tz   # 2.6: shootout, stats, table, VAR, preview
   var de, tab0, tb0, kid, tq, crest, curl      # league position between matches
   var imgs, img, ih, ia, fl                     # 2.8: custom kit images, background during the goal flash
+  var ic                                        # 3.1: kit icons on the clock (nil = list unknown)
 
   def init()
     # up to two teams, each with its own kit settings
@@ -76,6 +77,7 @@ class LiveScore
     end
     self.ti = 0
     self.pick(0)
+    self.icons()
     self.every = store.get("every")
     self.post = store.get("post")
     self.pre = int(store.get("pre"))
@@ -272,11 +274,60 @@ class LiveScore
     return string.find(m[0], "/") < 0 ? m[1] : m[0]   # a web address (TC002) stays whole
   end
 
-  # kit images to try, the first one on the clock wins: your pick, else kit-<ID>,
-  # for away games kit-<ID>-away first (home and away kits from the community)
+  # kit images to try, the first one on the clock wins: your pick, else
+  # home kit-<ID> or kit-<ID>-home..., away kit-<ID>-away... first (rest of the name is free)
   def kn(id, im, aw)
     if im != nil return [im] end
-    return aw ? ["kit-" + id + "-away", "kit-" + id] : ["kit-" + id]
+    var k = "kit-" + id
+    if self.ic == nil return aw ? [k + "-away", k] : [k] end   # list unknown: exact names only
+    var L = []
+    var a = aw ? self.kp(k + "-away") : nil
+    if a != nil L.push(a) end
+    if self.ic.find(k) != nil L.push(k)
+    else
+      var h = self.kp(k + "-home")
+      if h != nil L.push(h) end
+    end
+    return L
+  end
+
+  # alphabetically first icon on the clock whose name starts with p
+  def kp(p)
+    var r = nil
+    for n : self.ic
+      if string.find(n, p) == 0 && (r == nil || n < r) r = n end
+    end
+    return r
+  end
+
+  # read the icon list of this clock (only names starting with kit-, without extension)
+  def icons()
+    http.get("http://127.0.0.1/api/v1/files?dir=%2FICONS", / b, st -> self.on_icons(b, st), {"cap": 65536})
+  end
+
+  def on_icons(b, st)
+    if b == nil || st != 200 return end         # e.g. with a login: exact names only
+    var L = []
+    var q = "\"name\":\"kit-"
+    var i = string.find(b, q)
+    while i >= 0
+      var e = string.find(b, "\"", i + 8)
+      if e < 0 break end
+      var n = b[i + 8 .. e - 1]
+      var x = size(n) - 4
+      if x > 0 && n[x] == "." n = n[0 .. x - 1] end   # drop .gif / .jpg
+      L.push(n)
+      i = string.find(b, q, e)
+    end
+    self.ic = L
+    self.setk()
+  end
+
+  # kit images of the current match (again once the icon list has arrived)
+  def setk()
+    if self.kh == nil return end
+    self.ih = self.kn(self.hid[0], self.mh ? self.img[0] : nil, false)
+    self.ia = self.kn(self.hid[1], self.mh ? nil : self.img[1], true)
   end
 
   # one kit as 256 colours (0 = empty): base, pattern, cuffs, V-neck, badge
@@ -560,9 +611,9 @@ class LiveScore
       var mk = self.ecol ? self.kit(col[mi], col[mi + 1], M[2]) : self.kit(M[0], M[1], M[2])
       self.kh = mh ? mk : ok
       self.ka = mh ? ok : mk
-      self.ih = self.kn(R[0][0], mh ? self.img[0] : nil, false)   # home: kit-<ID>
-      self.ia = self.kn(R[1][0], mh ? nil : self.img[1], true)    # away: kit-<ID>-away first
       self.mh = mh
+      self.setk()                                # home left, away right
+      self.icons()                               # read the icon list again (kits added since the start)
       self.tn = nn
       self.nh = self.ansage(nn[0])
       self.na = self.ansage(nn[1])
