@@ -1,7 +1,7 @@
 # @name    BeautifulWeather
 # @desc    Animated 16x16 weather symbols, big temperature and humidity, hourly curve; turn the knob for rain in the next 3 hours, wind with a wind rose, a 3-day forecast, sunrise/sunset and the moon with moonrise/moonset (52x16, Ulanzi TC002)
 # @author  Hank_the_Tank / Claude
-# @version 3.0
+# @version 3.1
 # @display 52x16
 # @config  lang  select "Language"           default=English options=English,Deutsch help="Language of the texts on the panel (rain page, weekdays)" group="Location"
 # @config  lat   number "Latitude"           default=52.52 min=-90 max=90 step=0.0001 group="Location"
@@ -37,7 +37,7 @@ class BeautifulWeather
   var mh, mimg, mi, mr, mst, rs, ss, nev, mtw   # moon: hex images, decoded image, phase; rise/set
   var wk, wh, traw, tc5, hr, tg, tu, tx, hum, hcol, hraw, hg, hx, hc5, nar, ly                 # weather symbol, temperature, gradient, hourly values
   var ay, ac, ad, ab, fx, today, bh, nx, tm, tn # graph
-  var mday, mhr, mmin, ticks, age, busy, t0, tid
+  var mday, mhr, mmin, ticks, age, busy, t0, tid, hst   # hst: status of a failed weather request
   var mf, mpg, mpw, mc5, mc5f                    # moon: phase 0..1, lit-% glyphs and width, colours (+ faded copy)
   var de, auto, psec, atid                      # German panel texts; automatic page change, ms per page, its timer
   var pages, pi, pp, ps, tp, ts                 # knob pages (0 weather, 1 rain, 2 moon), index, previous, start times
@@ -676,6 +676,8 @@ class BeautifulWeather
 
   def on_body(w, status)
     self.busy = false
+    self.ticks = 60                              # no usable answer: try again in a minute
+    self.hst = status == nil ? 0 : status
     if w == nil return end
     var m = re.search("_2m\":([-0-9.]+)", w)
     var c = re.search("code\":(\\d+)", w)
@@ -808,6 +810,8 @@ class BeautifulWeather
     self.fcalc()
     self.wk = ic
     self.age = 0
+    self.ticks = 15 * 60
+    self.hst = nil
     store.set("temp", t)
     store.set("wk", ic)
     store.set("hr", hr)
@@ -1274,7 +1278,7 @@ class BeautifulWeather
               bw = k == 1 ? 1 : 2
             end
             var c = g5[r]
-            var s = bx - self.tx + r * 2 - sw
+            var s = sw < -50 ? 99 : bx - self.tx + r * 2 - sw   # -99 = no shine (other pages; tx is nil until the first weather data)
             if s > -3 && s < 3 c = self.mix(c, 0xFFFFFF, 0.75 * (1 - (s < 0 ? -s : s) / 3.0)) end
             rect_fill(bx, r * 2 + yo, bw, 2, c)
           end
@@ -1288,8 +1292,12 @@ class BeautifulWeather
 
   # Weather view, shifted by oy rows; t = seconds since shown
   def wview(oy, t)
-    if self.tg == nil
-      text(23, 10 + oy, "...", 0x666666)
+    if self.tg == nil                            # no weather yet: loading, or the code of the failed request
+      if self.hst == nil text(23, 10 + oy, "...", 0x666666)
+      else
+        var e = "ERR " + str(self.hst)
+        text(17 + (35 - text_ink_width(e)) / 2, 10 + oy, e, 0xB04040)
+      end
     end
     # Symbol fades in
     if self.wk >= 0

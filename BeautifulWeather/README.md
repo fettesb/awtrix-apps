@@ -1,6 +1,6 @@
 # Beautiful Weather for AWTRIX NG (Ulanzi TC002)
 
-**Version 3.0** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
+**Version 3.1** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
 
 ![Beautiful Weather on the Ulanzi TC002](images/1-uebersicht.gif)
 
@@ -220,6 +220,7 @@ This is a test release. Useful feedback:
 
 ## Changelog
 
+- **3.1** – Fix: when no weather data had arrived yet (for example the request to Open-Meteo failed), the moon and forecast pages stopped the script with `type_error ... line 1277`. That no longer happens. A failed request is now retried after one minute instead of 15, and the weather page shows its error code (e.g. `ERR 404`) instead of `...`, so you can see why there is no data.
 - **3.0** – Moon: the picture now matches the lit share to the percent. Before, eight fixed pictures were used, so at about 40 % the clock still showed a thin 15 % crescent. The clock now computes the moon for every percent from LeonCB's full and new moon, with a soft shadow line; mirrored south of the equator. The script is about 10 KB smaller.
 - **2.9** – Moon: the dark side is now visible in every phase. It was too dark for the LEDs, so on the clock only the lit part showed, a thin crescent without its disc. It now glows faintly in the same cool grey as the new moon, the lit part stays as it is.
 - **2.8** – Moon: the lit share now includes how far the moon stands above or below the sun's path. Around new moon it was up to about half a point too low (0 % instead of 1 %).
