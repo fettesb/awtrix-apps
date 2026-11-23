@@ -1,6 +1,6 @@
 # LiveScore for AWTRIX NG (Ulanzi TC002)
 
-**Version 3.1** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
+**Version 3.2** · by Hank_the_Tank / Claude · for the **52×16 panel** of the Ulanzi TC002
 
 ![LiveScore on the Ulanzi TC002](images/cover.gif)
 
@@ -38,7 +38,8 @@ The app **only joins the rotation around your team's matches**: a preview before
 - **Final score.** Stays for 15 minutes. A win brings confetti and a fanfare; the losing kit turns grey (a kit image stays as it is). Then score, stats, **league position** with its change (`Rank 3 ▲2` · `27 points`) and **next match** (`Sat 15:30` · `@ Mainz`) take turns.
 - **Referee whistles.** One at kick-off and after the break, two at half-time, three at full time.
 - **Goal announcement.** After the jingle the clock calls *"Goal! Goal! Goal! Dortmund!"* (or *"No goal!"* after VAR). With *Language* `Deutsch` and a German voice pack: *"Tor! Tor! Tor! Osnabrück!"* with German names (Cologne → Köln). For other voice packs type your own call, e.g. *"Doelpunt! {team}!"*. Voice packs are available in [Blueforcer's shop](https://ko-fi.com/blueforcer/shop).
-- **League position between matches (optional).** Without a match the app shows your kit or club crest, your position with an arrow for the change (`10. ▲2`) and your points.
+- **League position between matches (optional).** Without a match the app shows your kit or club crest, your position with an arrow for the change (`10. ▲2`) and your points, in a slow rotation with your **next match** (day, time, opponent) and your **recent form** (the last 5 results as dots) when ESPN has them.
+- **Round name for cup and European ties.** Before kick-off, a short banner names the round for knockout matches (`Round of 16`, `Quarterfinals`, `Semifinals`, `Final`…) when ESPN provides one. League matches have no round name and show the usual kick-off countdown right away.
 - **Quiet hours.** No sound between two hours of your choice; the animations still run.
 - **MQTT for your smart home.** Every event is published as JSON, e.g. to flash your lights in your club colours on every goal. See *MQTT and Home Assistant* below.
 - **Light on the network.** Fixtures every 30 minutes, the score every 30 s while the match is on. Press the middle button to update right away.
@@ -76,7 +77,7 @@ All settings are behind the gear on the *LiveScore* row of the **Apps** tab, in 
 | **Show final score** | 15 min | How long the result stays. `0` hides the app right away |
 | **Preview before kick-off** | 60 min | When the kits and countdown appear. `0` = from kick-off |
 | **Stats, table, next match** | on | Stats at half-time; after full time also league position and next match |
-| **League position between matches** | off | Shows your first team's position and points when no match is on. Off: the app only appears around matches. Not for national teams |
+| **League position between matches** | off | Shows your first team's position and points when no match is on, plus the next match and recent form when available. Off: the app only appears around matches. Not for national teams |
 | **Show with the league position** | kit | `kit` or `crest`: the club crest from ESPN (loaded once through the image service wsrv.nl; your kit is shown until it has arrived) |
 | **Include friendlies** | off | ESPN often doesn't update friendlies live |
 | **Jump in at kick-off, goals and full time** | on | Brings the app to the front for these moments and VAR decisions |
@@ -216,12 +217,10 @@ Messages are sent whether or not LiveScore is on screen, also during quiet hours
 <img src="images/still-6.jpg" width="49%">
 <img src="images/still-7.jpg" width="49%">
 <img src="images/still-8.jpg" width="49%">
-<img src="images/still-9.jpg" width="49%">
-<img src="images/still-10.jpg" width="49%">
-<img src="images/still-11.jpg" width="49%">
 
 ## Changelog
 
+- **3.2** – League position page now also shows your **next match** and your **recent form** (last 5 results) in a slow rotation; the next match comes from data already loaded, form needs one extra request per hour. Cup and European knockout matches get a short **round name** banner (`Round of 16`, `Quarterfinals`…) before kick-off. The next-match pages show your **home or away kit** for that match (it used to show the kit of the match just played).
 - **3.1** – Kits are found by the beginning of their name: `kit-<ESPN ID>-home…` and `kit-<ESPN ID>-away…`, the rest is free (idea by hi2hello). No more clashes with taken names on the Hub.
 - **3.0** – *Kit image* takes two names, `home, away`, so suffixed icons like `kit-481-3` work without renaming.
 - **2.9** – **Away kits:** the away team wears `kit-<ESPN ID>-away` if it is on the clock, otherwise `kit-<ESPN ID>`. Clearer help on kit names and ESPN IDs.

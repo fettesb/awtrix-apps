@@ -1,7 +1,7 @@
 # @name    LiveScore
 # @desc    Live football score of your favourite team (ESPN) with both team kits, goal fireworks, jingle and referee whistles - only in the rotation while the match is on (52x16, Ulanzi TC002)
 # @author  Hank_the_Tank / Claude
-# @version 3.1
+# @version 3.2
 # @display 52x16
 # @config  team     text   "ESPN team ID"              default="132" maxlen=8 group="My Team" help="The number in espn.com/soccer/club/_/id/<ID>/... - 132 = Bayern Munich"
 # @config  kcol     color  "Kit colour (my team)"      default=#DC052D group="My Team"
@@ -19,7 +19,7 @@
 # @config  post     number "Show final score"         default=15 min=0 max=120 unit=min group="Settings"
 # @config  pre      number "Preview before kick-off"  default=60 min=0 max=240 unit=min group="Settings" help="This long before the match: both kits with kick-off time and countdown. 0 = from kick-off"
 # @config  extra    bool   "Stats, table, next match" default=true group="Settings" help="Half-time: possession and shots. After full time also league position and next match"
-# @config  tab0     bool   "League position between matches" default=false group="Settings" help="Without a match the app shows the position and points of your (first) team. Off: only around matches"
+# @config  tab0     bool   "League position between matches" default=false group="Settings" help="Without a match the app shows the position and points of your (first) team, plus the next match and recent form. Off: only around matches"
 # @config  tabpic   select "Show with the league position" default=kit group="Settings" options=kit,crest help="Your kit or the club crest from ESPN"
 # @config  friendly bool   "Include friendlies"        default=false group="Settings" help="ESPN often does not update friendlies live"
 # @config  jump     bool   "Jump in at kick-off, goals and full time" default=true group="Settings"
@@ -51,6 +51,7 @@ class LiveScore
   var t0, gm, kc, tl, rnd, pend, wh, sj, ss, sv, fan, wd # animation and sound
   var so, sot, stx, rk0, tbx, rq, nx, lose, res, cf, vf, vt, ptx, pg, tz   # 2.6: shootout, stats, table, VAR, preview
   var de, tab0, tb0, kid, tq, crest, curl      # league position between matches
+  var nxi, nei, frm, rdn                        # 3.2: next match + form on the league position page, round name
   var imgs, img, ih, ia, fl                     # 2.8: custom kit images, background during the goal flash
   var ic                                        # 3.1: kit icons on the clock (nil = list unknown)
 
@@ -103,6 +104,10 @@ class LiveScore
     self.tb0 = nil
     self.kid = nil
     self.tq = 0
+    self.nxi = nil
+    self.nei = nil
+    self.frm = nil
+    self.rdn = nil
     self.lb = de ? ["Schüsse", "Platz ", " Punkte", "heute", "in ", "So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"] :
                    ["Shots", "Rank ", " points", "today", "in ", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     self.say2 = de ? ["Tor! Tor! Tor! ", "Kein Tor!"] : ["Goal! Goal! Goal! ", "No goal!"]
@@ -213,7 +218,7 @@ class LiveScore
     self.tn = ["", ""]
     # ESPN answers some user agents with 403 - curl is accepted
     self.hd = {'User-Agent': "curl/8.7.1"}
-    self.ol = {'find': "\"status\":{", 'keep': 24000, 'cap': 24000, 'headers': self.hd}   # incl. stats and details
+    self.ol = {'find': "\"season\":{", 'keep': 24000, 'cap': 24000, 'headers': self.hd}   # incl. round, stats and details
     self.os = {'find': "\"events\":[", 'keep': 48000, 'cap': 48000, 'headers': self.hd}
     self.sb = "bpm 120\nvolume 60\ninst b wave=sine attack=0 decay=140 sustain=0 volume=45 echo=20\nb: e5:1 a5:2"
     # fixed random table: sparks and confetti look equally good every time
@@ -399,11 +404,6 @@ class LiveScore
       var s = re.search("\"slug\":\"([^\"]+)\"", b[l .. l + 300])
       if h == nil || s == nil return nil end
       if h[1] != x && string.find("," + self.skip + ",", "," + h[1] + ",") < 0 && (self.fr || string.find(s[1], "friendly") < 0)
-        var y = int(h[2])
-        var mo = int(h[3])
-        if mo <= 2 y -= 1 end
-        var dd = y * 365 + y / 4 - y / 100 + y / 400 +
-                 (153 * (mo > 2 ? mo - 3 : mo + 9) + 2) / 5 + int(h[4]) - 1 - 719468
         var o = ""
         var hm = false
         var p = string.find(b, "\"homeAway\":\"", e)
@@ -419,11 +419,35 @@ class LiveScore
           end
           p = string.find(b, "\"homeAway\":\"", p + 10)
         end
-        return [h[1], s[1], dd * 86400 + int(h[5]) * 3600 + int(h[6]) * 60, o, hm]
+        return [h[1], s[1], self.epo(h[2], h[3], h[4], h[5], h[6]), o, hm]
       end
       i = string.find(b, "isTournament", l)       # skip past the league object
       if i < 0 return nil end
     end
+  end
+
+  # date -> epoch seconds (civil_from_days), shared by first() and on_team()
+  def epo(y, mo, d, hh, mm)
+    y = int(y)
+    mo = int(mo)
+    if mo <= 2 y -= 1 end
+    var dd = y * 365 + y / 4 - y / 100 + y / 400 +
+             (153 * (mo > 2 ? mo - 3 : mo + 9) + 2) / 5 + int(d) - 1 - 719468
+    return dd * 86400 + int(hh) * 3600 + int(mm) * 60
+  end
+
+  # round name for knockout competitions (ESPN uses a dedicated slug instead of the season name
+  # there); a normal league match has none and stays nil
+  def rndname(s)
+    var m = self.de ? {"round-of-16": "Achtelfinale", "round-of-32": "Sechzehntelfinale",
+        "quarterfinals": "Viertelfinale", "semifinals": "Halbfinale", "final": "Finale",
+        "third-place": "Spiel um Platz 3", "league-phase": "Ligaphase", "group-stage": "Gruppenphase",
+        "knockout-round-play-offs": "Playoffs"} :
+      {"round-of-16": "Round of 16", "round-of-32": "Round of 32", "quarterfinals": "Quarterfinals",
+        "semifinals": "Semifinals", "final": "Final", "third-place": "Third Place",
+        "league-phase": "League Phase", "group-stage": "Group Stage",
+        "knockout-round-play-offs": "Knockout Play-offs"}
+    return m.find(s)
   end
 
   # fetch the fixtures of every team in turn; the earliest match wins
@@ -478,7 +502,7 @@ class LiveScore
     if b == nil || self.st != "post" return end
     var f = self.first(b, self.ev)
     if f == nil || f[3] == "" return end
-    self.nx = [self.day(f[2]), (f[4] ? "vs " : "@ ") + self.nme(f[3])]
+    self.nx = [self.day(f[2]), (f[4] ? "vs " : "@ ") + self.nme(f[3]), f[4]]   # [2] = I play at home
     self.pages()
   end
 
@@ -619,6 +643,8 @@ class LiveScore
       self.na = self.ansage(nn[1])
       self.colors()
       if self.extra self.tab(0) end              # remember the league position before the match
+      var rm = re.search("\"season\":\\{\"year\":\\d+,\"type\":\\d+,\"slug\":\"([^\"]+)\"", b)
+      self.rdn = (rm != nil && string.find("0123456789", rm[1][0]) < 0) ? self.rndname(rm[1]) : nil
     end
 
     # goal? VAR? Otherwise whistles at half-time and restart
@@ -1057,6 +1083,7 @@ class LiveScore
     self.tbx = nil
     self.rq = 0
     self.nx = nil
+    self.rdn = nil
     self.lose = 0
     self.res = 0
     self.cf = 0
@@ -1184,6 +1211,35 @@ class LiveScore
       t = str(n) + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd", "th", "th", "th", "th", "th", "th"][n % 10])
     end
     self.tb0 = [t, str(r[2]) + self.lb[2], d, str(d < 0 ? -d : d)]
+    # next match for the league position page, plus its event id for the form fetch
+    var ne = string.find(b, "\"nextEvent\":[{")
+    self.nxi = nil
+    self.nei = nil
+    if ne >= 0
+      var blk = b[ne .. ne + 6000]
+      var dt = re.search("\"date\":\"(\\d+)-(\\d+)-(\\d+)T(\\d+):(\\d+)", blk)
+      var eid = re.search("\"id\":\"(\\d+)\",\"neutralSite\"", blk)
+      if eid != nil self.nei = eid[1] end
+      if dt != nil
+        var hm = false
+        var opp = ""
+        var p = string.find(blk, "\"homeAway\":\"")
+        for j2 : 0 .. 1
+          if p < 0 break end
+          var mm = re.search("\"homeAway\":\"(\\w+)\",\"id\":\"(\\d+)\",\"order\":\\d+,\"team\":\\{\"abbreviation\":\"[^\"]*\",\"displayName\":\"([^\"]*)\"", blk[p .. p + 200])
+          if mm != nil
+            if mm[2] == self.tids[0]
+              hm = mm[1] == "home"
+            else
+              opp = mm[3]
+            end
+          end
+          p = string.find(blk, "\"homeAway\":\"", p + 10)
+        end
+        if opp != "" self.nxi = [self.day(self.epo(dt[1], dt[2], dt[3], dt[4], dt[5])), (hm ? "vs " : "@ ") + self.nme(opp), hm] end
+      end
+    end
+    if self.nei != nil self.form() end
     var M = self.mines[0]
     if self.ecols[0]
       var a = b[0 .. 400]
@@ -1195,6 +1251,30 @@ class LiveScore
     self.curl = "https://wsrv.nl/?url=a.espncdn.com/i/teamlogos/soccer/500/" + self.tids[0] + ".png&w=16&h=16&output=png&bg=" +
                 string.format("%06X", self.bgg == nil ? 0 : self.bgg[7])
     if self.kh != nil self.pages() end
+  end
+
+  # form (last 5 results) for the league position page; needs the event id of the next match
+  def form()
+    http.get("https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=" + self.nei,
+             / b, s -> self.on_form(b), {'find': "\"lastFiveGames\":[", 'keep': 16000, 'cap': 16000, 'headers': self.hd})
+  end
+
+  def on_form(b)
+    self.frm = nil
+    if b == nil return end
+    var i = string.find(b, "\"team\":{\"id\":\"" + self.tids[0] + "\"")
+    if i < 0 return end
+    var j = string.find(b, "\"displayOrder\":2", i)
+    if j < 0 j = i + 4000 end
+    var r = []
+    var p = i
+    while size(r) < 5
+      p = string.find(b, "\"gameResult\":\"", p)
+      if p < 0 || p > j break end
+      r.push(b[p + 14])
+      p += 14
+    end
+    if size(r) > 0 self.frm = r end
   end
 
   def hexv(x)
@@ -1231,6 +1311,47 @@ class LiveScore
       text(x + 6, 7, T[3], c)
     end
     text(34 - text_ink_width(T[1]) / 2 + ox, 14, T[1], 0xA0A0A0)
+  end
+
+  # which extra pages the league position screen cycles through: 0 = position, 1 = next match, 2 = form
+  def ipages()
+    var p = [0]
+    if self.nxi != nil p.push(1) end
+    if self.frm != nil p.push(2) end
+    return p
+  end
+
+  # next match: my kit/crest on the left, day/time and opponent on the right (like the post-match page)
+  def nxp()
+    var hm = self.nxi[2]
+    if !self.crest || self.curl == nil || !icon(self.curl, 0, 0)
+      self.kdi(self.kid, self.kn(self.tids[0], self.imgs[0][hm ? 0 : 1], !hm), 0, 0, false, -99)
+    end
+    var N = self.nxi
+    font("small")
+    text(34 - text_ink_width(N[0]) / 2, 7, N[0], self.scol)
+    var w = text_ink_width(N[1])
+    if w <= 34
+      text(34 - w / 2, 14, N[1], 0xA0A0A0)
+    else
+      scroll_text(17, 14, 35, N[1], 0xA0A0A0)
+    end
+  end
+
+  # form: the last 5 results as dots, oldest on the left, most recent on the right
+  def frmp()
+    if !self.crest || self.curl == nil || !icon(self.curl, 0, 0)
+      self.kdi(self.kid, self.kn(self.tids[0], self.imgs[0][0], false), 0, 0, false, -99)
+    end
+    font("small")
+    text(34 - text_ink_width("Form") / 2, 7, "Form", 0x909090)
+    var n = size(self.frm)
+    var x0 = 34 - (n * 6 - 1) / 2
+    for i : 0 .. n - 1
+      var r = self.frm[n - 1 - i]
+      var c = r == "W" ? 0x30E030 : (r == "D" ? 0xA0A0A0 : 0xFF4040)
+      rect_fill(x0 + i * 6, 9, 5, 5, c)
+    end
   end
 
   def on_hide()
@@ -1503,7 +1624,7 @@ class LiveScore
       text(26 - text_ink_width(T[1]) / 2 + ox, 14, T[1], 0xA0A0A0)
       return
     end
-    self.kdi(self.mh ? self.kh : self.ka, self.mh ? self.ih : self.ia, ox, 0, false, -99)   # my kit on the left, the text on the right
+    self.kdi(self.mh ? self.kh : self.ka, self.kn(self.tid, self.img[self.nx[2] ? 0 : 1], !self.nx[2]), ox, 0, false, -99)   # my kit on the left, the text on the right
     var N = self.nx                              # next match: day and time, opponent
     text(34 - text_ink_width(N[0]) / 2 + ox, 7, N[0], self.scol)
     var w = text_ink_width(N[1])
@@ -1522,6 +1643,16 @@ class LiveScore
     end
     var now = now_ms()
     if !self.show && self.tb0 != nil && self.kid != nil   # between matches: league position
+      var ip = self.ipages()
+      var np = size(ip)
+      if np > 1
+        var r = (now - self.t0) % (6000 + 4000 * (np - 1))
+        if r >= 6000
+          var k = ip[1 + (r - 6000) / 4000]
+          if k == 1 self.nxp() else self.frmp() end
+          return
+        end
+      end
       self.idle((now - self.t0) / 1000.0, now)
       return
     end
@@ -1584,10 +1715,18 @@ class LiveScore
     elif vt < 3.0
       self.vard(vt, now)
     elif self.st == "pre"                        # preview: kick-off time, the countdown below
-      var f = self.ez((e - 0.3) / 0.4)
       font("small")
-      text(26 - text_ink_width(self.ptx[0]) / 2, 7, self.ptx[0], self.col(self.scol, f))
-      text(26 - text_ink_width(self.ptx[1]) / 2, 14, self.ptx[1], self.col(self.bcol, f * (0.75 + 0.25 * math.sin(now * 0.004))))
+      if self.rdn != nil && e < 2.6                # short banner with the round name (knockout matches only)
+        var ea = self.ez(e < 0.3 ? e / 0.3 : (e > 2.2 ? (2.6 - e) / 0.4 : 1.0))
+        var dy = int(-3 * (1 - self.ez(e / 0.3)) + 0.5)
+        rect_fill(0, 4 + dy, 52, 8, self.col(0x202830, ea * 0.85))
+        text(26 - text_ink_width(self.rdn) / 2, 5 + dy, self.rdn, self.col(0xFFD060, ea))
+      else
+        var f = self.ez(((self.rdn != nil ? e - 2.6 : e) - 0.3) / 0.4)
+        text(26 - text_ink_width(self.ptx[0]) / 2, 7, self.ptx[0], self.col(self.scol, f))
+      end
+      var f2 = self.ez((e - 0.3) / 0.4)
+      text(26 - text_ink_width(self.ptx[1]) / 2, 14, self.ptx[1], self.col(self.bcol, f2 * (0.75 + 0.25 * math.sin(now * 0.004))))
     else
       var f = self.ez((e - 0.3) / 0.4)          # digits fade in and slide down
       var yo = -int(4 * (1 - f))
